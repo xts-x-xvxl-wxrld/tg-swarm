@@ -1,9 +1,9 @@
 [project]
-name = "open-swarm"
-description = "An open-source multi-agent AI team built on Agency Swarm and the OpenAI Agents SDK"
+name = "tg-swarm"
+description = "Telegram-native autonomous agent platform with a purpose-built orchestrator"
 version = "0.1.0"
 license = { text = "MIT" }
-keywords = ["agency-swarm", "openai", "multi-agent", "open-source", "openswarm"]
+keywords = ["telegram", "multi-agent", "orchestrator", "automation", "tg-swarm"]
 requires-python = ">=3.12"
 dependencies = [
     "agency-swarm[fastapi,jupyter,litellm]>=1.9.7",
@@ -57,10 +57,10 @@ dependencies = [
 ]
 
 [project.scripts]
-openswarm = "run_utils:main"
+tg-swarm = "server:main"
 
 [tool.setuptools]
-py-modules = ["agency", "swarm", "helpers", "config", "onboard", "server"]
+py-modules = ["helpers", "config", "onboard", "run_utils", "server"]
 
 [tool.setuptools.packages.find]
 where = ["."]

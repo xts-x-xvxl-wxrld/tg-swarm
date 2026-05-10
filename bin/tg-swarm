@@ -33,7 +33,9 @@ function getBinaryName() {
 }
 
 function getDownloadUrl(binaryName) {
-  const explicit = process.env.OPENSWARM_TUI_URL && process.env.OPENSWARM_TUI_URL.trim()
+  const explicit =
+    (process.env.TG_SWARM_TUI_URL && process.env.TG_SWARM_TUI_URL.trim()) ||
+    (process.env.OPENSWARM_TUI_URL && process.env.OPENSWARM_TUI_URL.trim())
   if (explicit) return explicit
   return `https://github.com/VRSEN/OpenSwarm/releases/latest/download/${binaryName}`
 }
@@ -79,7 +81,7 @@ function request(url, redirects = 0) {
       url,
       {
         headers: {
-          'User-Agent': '@vrsen/openswarm',
+          'User-Agent': 'tg-swarm',
         },
       },
       (res) => {
@@ -144,7 +146,7 @@ async function ensureCustomBinary() {
   fs.rmSync(binaryPath, { force: true })
 
   const url = getDownloadUrl(binaryName)
-  process.stdout.write('Downloading OpenSwarm TUI...\n')
+  process.stdout.write('Downloading tg-swarm TUI...\n')
   try {
     await download(url, binaryPath)
     const resolved = resolveCustomBinary(binaryPath)
@@ -156,7 +158,7 @@ async function ensureCustomBinary() {
   } catch (error) {
     fs.rmSync(binaryPath, { force: true })
     process.stderr.write(
-      `openswarm: custom OpenSwarm TUI unavailable (${error instanceof Error ? error.message : String(error)}); falling back to packaged AgentSwarm UI.\n`,
+      `tg-swarm: custom tg-swarm TUI unavailable (${error instanceof Error ? error.message : String(error)}); falling back to packaged AgentSwarm UI.\n`,
     )
     return null
   }
@@ -164,7 +166,7 @@ async function ensureCustomBinary() {
 
 const agentswarmBin = resolveAgentswarm(packageDir)
 if (!agentswarmBin) {
-  process.stderr.write('openswarm: could not resolve @vrsen/agentswarm. Reinstall @vrsen/openswarm or run npm install in this checkout.\n')
+  process.stderr.write('tg-swarm: could not resolve @vrsen/agentswarm. Reinstall tg-swarm or run npm install in this checkout.\n')
   process.exit(1)
 }
 
@@ -184,13 +186,13 @@ async function main() {
   })
 
   if (result.error) {
-    process.stderr.write(`openswarm: ${result.error.message}\n`)
+    process.stderr.write(`tg-swarm: ${result.error.message}\n`)
     process.exit(1)
   }
   process.exit(result.status ?? 1)
 }
 
 main().catch((error) => {
-  process.stderr.write(`openswarm: ${error instanceof Error ? error.message : String(error)}\n`)
+  process.stderr.write(`tg-swarm: ${error instanceof Error ? error.message : String(error)}\n`)
   process.exit(1)
 })

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""OpenSwarm interactive setup wizard.
+"""tg-swarm interactive setup wizard.
 
 Run directly:   python onboard.py
-Auto-launched:  python run.py  (when no provider key is found)
+Auto-launched:  tg-swarm-compatible local setup flow
 """
 
 import getpass
@@ -214,7 +214,7 @@ def _write_env(updates: dict) -> None:
 def run_onboarding() -> None:
     console.print()
     console.print(Panel.fit(
-        "[bold cyan]OpenSwarm[/bold cyan]  [dim]—  open-source multi-agent AI team[/dim]\n"
+        "[bold cyan]tg-swarm[/bold cyan]  [dim]—  Telegram-native autonomous agent platform[/dim]\n"
         "[dim]Let's get you set up in a few steps.[/dim]",
         border_style="cyan",
         padding=(1, 4),

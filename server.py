@@ -169,7 +169,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = _parse_args()
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8080"))
@@ -188,3 +188,7 @@ if __name__ == "__main__":
     else:
         logger.info("Starting TelegramSwarm runtime at http://%s:%s", host, port)
         uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    main()

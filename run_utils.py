@@ -140,20 +140,20 @@ def _bootstrap() -> None:
         except Exception:
             pass
 
-    # Download the OpenSwarm TUI binary from GitHub Releases if missing.
+    # Download the tg-swarm TUI binary from GitHub Releases if missing.
     _bin_name = _resolve_bin_name()
     _bin_path = _repo / _bin_name
     if not _bin_path.exists():
         import urllib.request
         _bin_url = f"https://github.com/VRSEN/OpenSwarm/releases/latest/download/{_bin_name}"
-        print("Downloading OpenSwarm TUI, please wait…\n")
+        print("Downloading tg-swarm TUI, please wait…\n")
         try:
             urllib.request.urlretrieve(_bin_url, str(_bin_path))
             if sys.platform != "win32":
                 _bin_path.chmod(0o755)
             print("\nDone.\n")
         except Exception:
-            print("Warning: Could not download OpenSwarm TUI. The terminal UI will use the default.\n")
+            print("Warning: Could not download tg-swarm TUI. The terminal UI will use the default.\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -189,8 +189,10 @@ def _configure_demo_console() -> None:
     import warnings
 
     # By default, silence *all* console output for demo runs.
-    # Opt out by setting OPENSWARM_DEMO_SILENCE_CONSOLE=0 / false / off.
-    silence_env = os.getenv("OPENSWARM_DEMO_SILENCE_CONSOLE", "").strip().lower()
+    # Opt out by setting TG_SWARM_DEMO_SILENCE_CONSOLE=0 / false / off.
+    silence_env = os.getenv("TG_SWARM_DEMO_SILENCE_CONSOLE", "").strip().lower()
+    if not silence_env:
+        silence_env = os.getenv("OPENSWARM_DEMO_SILENCE_CONSOLE", "").strip().lower()
     silence_console = silence_env not in {"0", "false", "no", "off"}
 
     if silence_console:
@@ -205,7 +207,10 @@ def _configure_demo_console() -> None:
         return
 
     # Keep this opt-in so developers can still see warnings when needed.
-    if os.getenv("OPENSWARM_DEMO_SHOW_WARNINGS", "").strip().lower() in {"1", "true", "yes", "on"}:
+    show_warnings_env = os.getenv("TG_SWARM_DEMO_SHOW_WARNINGS", "").strip().lower()
+    if not show_warnings_env:
+        show_warnings_env = os.getenv("OPENSWARM_DEMO_SHOW_WARNINGS", "").strip().lower()
+    if show_warnings_env in {"1", "true", "yes", "on"}:
         return
 
     # pyzmq RuntimeWarning on Windows ProactorEventLoop (common with Python 3.8+ / 3.12)
@@ -253,7 +258,8 @@ def main() -> None:
 
     from swarm import create_agency
 
-    onboard_flag = Path(tempfile.gettempdir()) / "_openswarm_onboard.flag"
+    onboard_flag = Path(tempfile.gettempdir()) / "_tg_swarm_onboard.flag"
+    os.environ["TG_SWARM_ONBOARD_FLAG"] = str(onboard_flag)
     os.environ["OPENSWARM_ONBOARD_FLAG"] = str(onboard_flag)
     onboard_flag.unlink(missing_ok=True)
 
@@ -262,7 +268,7 @@ def main() -> None:
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
         logging.disable(logging.NOTSET)
-        print("\nStarting OpenSwarm… this may take a few seconds.")
+        print("\nStarting tg-swarm… this may take a few seconds.")
         _configure_demo_console()
 
         # Suppress OS-level stderr (fd 2) to prevent GLib/GIO UWP-app

@@ -5,7 +5,7 @@ on:
     paths:
       - '.github/workflows/build-tui.yml'
       - '.github/workflows/test-mac.yml'
-      - 'bin/openswarm'
+      - 'bin/tg-swarm'
       - 'package.json'
 
 jobs:
@@ -78,8 +78,8 @@ jobs:
 
           def resolve_launcher(root):
               candidates = [
-                  root / "node_modules" / ".bin" / "openswarm",
-                  root / "node_modules" / "@vrsen" / "openswarm" / "bin" / "openswarm",
+                  root / "node_modules" / ".bin" / "tg-swarm",
+                  root / "node_modules" / "tg-swarm" / "bin" / "tg-swarm",
               ]
               for candidate in candidates:
                   if candidate.exists():
@@ -87,10 +87,10 @@ jobs:
               return None
 
           repo = pathlib.Path.cwd()
-          root = pathlib.Path(tempfile.mkdtemp(prefix="openswarm-smoke-"))
+          root = pathlib.Path(tempfile.mkdtemp(prefix="tg-swarm-smoke-"))
           release_dir = root / "release"
           release_dir.mkdir()
-          env = {**os.environ, "OPENSWARM_DEMO_SILENCE_CONSOLE": "0"}
+          env = {**os.environ, "TG_SWARM_DEMO_SILENCE_CONSOLE": "0"}
           binary_name = resolve_binary_name()
           server, thread = start_server(release_dir)
           base_url = f"http://127.0.0.1:{server.server_port}"
@@ -111,7 +111,7 @@ jobs:
 
           if binary is None:
               listing = subprocess.run(
-                  ["find", "node_modules", "-maxdepth", "4", "-name", "openswarm"],
+                  ["find", "node_modules", "-maxdepth", "4", "-name", "tg-swarm"],
                   cwd=root,
                   capture_output=True,
                   text=True,

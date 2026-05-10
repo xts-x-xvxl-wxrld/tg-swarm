@@ -1,36 +1,31 @@
 {
-    "name": "@vrsen/openswarm",
+    "name": "tg-swarm",
     "version": "0.1.27",
-    "description": "An open-source multi-agent AI team built on Agency Swarm",
+    "description": "Telegram-native autonomous agent platform with a purpose-built orchestrator",
     "license": "MIT",
     "bin": {
-        "openswarm": "./bin/openswarm"
+        "tg-swarm": "./bin/tg-swarm"
     },
     "files": [
         "bin/",
         "run_utils.py",
         "onboard.py",
-        "swarm.py",
         "config.py",
         "helpers.py",
         "server.py",
         "shared_instructions.md",
+        "agents/",
+        "telegram_app/",
+        "prompts/",
         "shared_tools/",
-        "orchestrator/",
-        "data_analyst_agent/",
-        "deep_research/",
-        "docs_agent/",
-        "image_generation_agent/",
-        "slides_agent/",
-        "video_generation_agent/",
-        "virtual_assistant/",
-        "patches/",
+        "tools/",
+        "requirements.txt",
         "pyproject.toml",
         "package.json",
         "package-lock.json"
     ],
     "scripts": {
-        "postinstall": "node -e \"const fs=require('fs');const path=require('path');const cp=require('child_process');const pkg=__dirname;const patchTarget=path.join(pkg,'node_modules','dom-to-pptx');const patchCli=path.join(pkg,'node_modules','patch-package','index.js');if(fs.existsSync(patchTarget)&&fs.existsSync(patchCli)){cp.execFileSync(process.execPath,[patchCli],{cwd:pkg,stdio:'inherit'});}try{fs.chmodSync(path.join(pkg,'bin','openswarm'),0o755)}catch(e){}\""
+        "postinstall": "node -e \"const fs=require('fs');const path=require('path');const cp=require('child_process');const pkg=__dirname;const patchTarget=path.join(pkg,'node_modules','dom-to-pptx');const patchCli=path.join(pkg,'node_modules','patch-package','index.js');if(fs.existsSync(patchTarget)&&fs.existsSync(patchCli)){cp.execFileSync(process.execPath,[patchCli],{cwd:pkg,stdio:'inherit'});}try{fs.chmodSync(path.join(pkg,'bin','tg-swarm'),0o755)}catch(e){}\""
     },
     "dependencies": {
         "@vrsen/agentswarm": "latest",

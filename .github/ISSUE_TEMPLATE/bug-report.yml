@@ -20,10 +20,10 @@ body:
       required: false
 
   - type: input
-    id: openswarm-version
+    id: tg-swarm-version
     attributes:
-      label: OpenSwarm version
-      description: What version of OpenSwarm are you using?
+      label: tg-swarm version
+      description: What version of tg-swarm are you using?
     validations:
       required: false
 

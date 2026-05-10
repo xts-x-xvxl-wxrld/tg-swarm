@@ -1,9 +1,17 @@
 # Change Log
 
+## 2026-05-11
+
+- Renamed the npm launcher path from `bin/openswarm` to `bin/tg-swarm`, updated package metadata and lockfile to publish `tg-swarm`, and refreshed the macOS smoke-test workflow plus issue template labels to match the new package identity.
+- Updated `run_utils.py` and `onboard.py` branding to `tg-swarm` while keeping fallback support for legacy `OPENSWARM_*` environment variables during the transition.
+
 ## 2026-05-10 (session 2)
 
+- Normalized git remotes so `origin` points at `xts-x-xvxl-wxrld/tg-swarm` and `upstream` points at `VRSEN/OpenSwarm`, then reset `main` to track `origin/main`.
+- Rewrote `AGENTS.md`, `README.md`, and selected metadata files so the repo describes the current Telegram-native runtime instead of the old OpenSwarm / Agency Swarm topology.
+- Updated the code index to stop pointing at deleted `swarm.py`-style entrypoints and to reflect the purpose-built orchestrator path.
 - Audited existing Agency Swarm infrastructure for reusability. Prompts (orchestrator, deep_research, virtual_assistant instructions) are high-value and framework-agnostic. Tool business logic is extractable with BaseTool wrapper removed. Framework glue (agent factories, swarm.py, patches) gets discarded entirely.
-- Decided on total replacement of Agency Swarm rather than retrofit. Key reason: framework runs via LiteLLM compatibility shim on Claude — no Assistants API benefits apply, only overhead.
+- Decided on total replacement of Agency Swarm rather than retrofit. Key reason: framework runs via LiteLLM compatibility shim on Claude - no Assistants API benefits apply, only overhead.
 - Added `wiki/plan/agency-swarm-replacement.md` covering Phase 2 (replace Agency Swarm core), Phase 3 (build three specialist agents), and Phase 4 (implement Telegram capability layer with MTProto).
 
 ## 2026-05-10

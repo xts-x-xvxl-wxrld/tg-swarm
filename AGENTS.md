@@ -1,130 +1,119 @@
-# OpenSwarm — Customization Guide
+# tg-swarm - Repository Guide
 
-This file gives coding agents (Cursor, Claude Code, Codex, etc.) everything they need to understand and customize this swarm. Read it before making any changes.
+This file gives coding agents the minimum context needed to work safely in this repository.
 
----
+## What This Repo Is
 
-## What is OpenSwarm?
+`tg-swarm` is a Telegram-native autonomous agent platform forked from OpenSwarm.
 
-OpenSwarm is a multi-agent AI team you can fork and reshape into any kind of swarm you need — SEO, sales, research, finance, customer support, or anything else. Each agent is a specialist. They collaborate through a shared orchestrator.
+The active product is no longer the stock OpenSwarm or Agency Swarm experience:
 
----
+- the runtime entrypoint is `server.py`
+- Telegram is the primary interface
+- orchestration happens through a purpose-built runtime in `telegram_app/orchestrator/`
+- the first operating mode is a discovery -> strategy -> account planning workflow
 
-## Folder Structure
+Some legacy OpenSwarm and Agency Swarm files still exist in the tree, but they are no longer the source of truth for the active runtime.
 
+## Read First
+
+When making changes, read these first:
+
+1. `wiki/index.md`
+2. `wiki/code-index/index.md`
+3. `server.py`
+4. `telegram_app/orchestrator/orchestrator.py`
+5. `telegram_app/app_service.py`
+6. `prompts/`
+
+Use `rg` to verify symbols and file locations before opening large modules.
+
+## Current Structure
+
+```text
+server.py                         <- FastAPI + Telegram polling entrypoint
+shared_instructions.md            <- shared high-level context used across the repo
+config.py                         <- model configuration helpers
+
+telegram_app/
+  app_service.py                  <- thin runtime coordinator
+  orchestrator/
+    orchestrator.py               <- purpose-built orchestrator
+    context_builder.py            <- runtime context assembly
+  transport/                      <- Telegram Bot API models and client
+  sessions/                       <- session persistence and workflow state
+  approvals/                      <- approval persistence and state machine
+  capabilities/                   <- Telegram/domain capability interfaces
+  models/                         <- runtime data contracts
+
+agents/
+  discovery/                      <- discovery specialist
+  strategy/                       <- strategy specialist
+  account_manager/                <- account planning specialist
+
+prompts/
+  orchestrator.md
+  shared_runtime.md
+  discovery.md
+  strategy.md
+  account_manager.md
+  researcher.md
+
+shared_tools/                     <- reusable tool code and legacy shared integrations
+tools/                            <- framework-agnostic helper tools
+wiki/                             <- specs, plans, code index, and change log
+tests/                            <- focused runtime and integration tests
 ```
-swarm.py                  ← main config: imports all agents, defines how they connect
-shared_instructions.md    ← context shared across every agent
-run.py                    ← CLI entry point (terminal demo)
-server.py                 ← API entry point (FastAPI server)
 
-orchestrator/
-  orchestrator.py         ← agent definition
-  instructions.md         ← system prompt
+## Runtime Shape
 
-data_analyst_agent/
-  data_analyst_agent.py
-  instructions.md
-  tools/                  ← custom tools for this agent
+The active request path is:
 
-docs_agent/
-  docs_agent.py
-  instructions.md
-  tools/
+1. Telegram update enters `server.py`
+2. `TelegramAppService` loads session and approval state
+3. `PurposeBuiltOrchestrator` interprets the turn
+4. the orchestrator either responds directly or routes to a specialist agent
+5. the runtime persists updated workflow state and returns Telegram messages
 
-slides_agent/
-  slides_agent.py
-  instructions.md
-  tools/
+The important implication is that agent changes usually involve both prompt logic and runtime state handling, not just prompt text.
 
-image_generation_agent/
-  image_generation_agent.py
-  instructions.md
-  tools/
+## How To Customize Safely
 
-video_generation_agent/
-  video_generation_agent.py
-  instructions.md
-  tools/
+To change the active swarm:
 
-deep_research/
-  deep_research.py
-  instructions.md
-  tools/
+1. Update prompts in `prompts/`
+2. Update specialist logic in `agents/`
+3. Update orchestration or routing rules in `telegram_app/orchestrator/`
+4. Update workflow state transitions in `telegram_app/sessions/`, `telegram_app/approvals/`, or `telegram_app/app_service.py` when behavior changes
+5. Update the relevant wiki spec or plan if the architecture or workflow meaning changes
 
-virtual_assistant/
-  virtual_assistant.py
-  instructions.md
-  tools/
-
-shared_tools/             ← tools available to all agents (Composio integrations, etc.)
-```
-
----
-
-## How Agents Connect (`swarm.py`)
-
-`swarm.py` is the only file you need to edit when adding, removing, or rewiring agents. It:
-
-1. Imports a `create_*` factory function from each agent folder
-2. Instantiates all agents
-3. Defines communication flows — who can talk to whom
-
-The default pattern is **orchestrator-to-all**: the orchestrator can send messages to every specialist, and all agents can hand off to each other.
-
----
-
-## How to Customize
-
-To build your own swarm from this repo:
-
-1. **Fork and rename** the repo (e.g., `seo-swarm`)
-2. **Decide which agents to keep, rename, or replace**
-   - Rename the folder and its files to match the new agent's purpose
-   - Update `instructions.md` with the new system prompt
-   - Update `swarm.py` to import and register the renamed agent
-3. **Add or remove tools** inside each agent's `tools/` folder
-4. **Update `shared_instructions.md`** with any context all agents should share
-5. **Run** with `python run.py`
-
-### Example prompt to give your coding agent
-
-> "Turn this into an SEO optimization swarm. The Research Agent becomes an SEO Keyword Planner, the Docs Agent becomes a Blog Post Writer, the Data Analyst becomes an SEO Analytics Agent (Google Search Console + GA4), and the General Agent handles technical SEO like schema markup and site audits. Keep the orchestrator and shared tools as-is."
-
-The coding agent will read this file, understand the structure, and make the right changes automatically.
-
----
-
-## Current Agents
-
-| Agent | Purpose |
-|---|---|
-| `orchestrator` | Routes tasks to the right specialist |
-| `virtual_assistant` | Email, calendar, Slack, file management |
-| `deep_research` | Web research and synthesis |
-| `data_analyst_agent` | Data analysis, visualization, statistical modeling |
-| `docs_agent` | Document creation and editing |
-| `slides_agent` | PowerPoint / HTML slide generation |
-| `image_generation_agent` | AI image generation and editing |
-| `video_generation_agent` | AI video generation and editing |
-
----
+Avoid treating `swarm.py`, `agency.py`, or legacy Agency Swarm topology as the live source of truth. Those paths are no longer the active architecture.
 
 ## Key Conventions
 
-- Each agent folder has one `<name>.py` file and one `instructions.md`
-- `instructions.md` is the agent's system prompt — edit it to change behavior
-- Tools live in `tools/` and are auto-loaded by the agent definition
-- `shared_tools/` contains Composio-powered integrations (Gmail, Slack, GitHub, etc.) available to all agents
-- Models are configured via `DEFAULT_MODEL` in `.env` — never hardcoded
+- Configure models through `DEFAULT_MODEL` in `.env`; do not hardcode model IDs in new code unless there is a strong reason.
+- Keep the Telegram runtime thin. Business logic should live in the orchestrator, specialist agents, or helper modules.
+- Persist workflow state through the session and approval managers rather than ad hoc files.
+- Prefer framework-agnostic helpers in `tools/` when extracting reusable logic.
+- If you change code navigation, architecture docs, or workflow boundaries, update `wiki/code-index/`, `wiki/index.md`, and `wiki/log.md` accordingly.
 
-Before proceeding with agent creation, please read the following instructions carefully:
+## Validation
 
-- `.cursor/rules/agency-swarm-workflow.mdc` - your primary guide for creating agents and agencies
+Use the smallest relevant validation step for the change:
 
-The following files can be read on demand, depending on the task at hand:
+- `python -m pytest tests/`
+- `python server.py`
+- `python server.py --poll`
 
-- `.cursor/commands/add-mcp.md` - how to add MCP servers to an agent
-- `.cursor/commands/mcp-code-exec.md` - how to convert an MCP server into the Code Execution Pattern (progressive tool disclosure, 98% token reduction)
-- `.cursor/commands/write-instructions.md` - how to write effective instructions for AI agents
-- `.cursor/commands/create-prd.md` - how to create a PRD for an agent (use for complex multi agent systems)
+If you touch only docs or git metadata, a focused verification pass is enough.
+
+## Legacy Notes
+
+These areas may still contain OpenSwarm or Agency Swarm references:
+
+- old documentation
+- packaging metadata
+- legacy shared tools
+- inactive agent folders not used by the Telegram runtime
+
+When cleaning those up, prefer small, explicit updates over broad renames.
