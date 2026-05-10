@@ -15,6 +15,7 @@ This wiki captures the working design for turning OpenSwarm into a Telegram-nati
 
 - [Telegram Platform + Marketing MVP Plan](plan/telegram-marketing-swarm-mvp.md)
 - [Telegram Runtime Refactor Plan](plan/telegram-runtime-refactor.md)
+- [Agency Swarm Replacement Plan](plan/agency-swarm-replacement.md)
 
 ## Code Index
 

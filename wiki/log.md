@@ -1,5 +1,11 @@
 # Change Log
 
+## 2026-05-10 (session 2)
+
+- Audited existing Agency Swarm infrastructure for reusability. Prompts (orchestrator, deep_research, virtual_assistant instructions) are high-value and framework-agnostic. Tool business logic is extractable with BaseTool wrapper removed. Framework glue (agent factories, swarm.py, patches) gets discarded entirely.
+- Decided on total replacement of Agency Swarm rather than retrofit. Key reason: framework runs via LiteLLM compatibility shim on Claude — no Assistants API benefits apply, only overhead.
+- Added `wiki/plan/agency-swarm-replacement.md` covering Phase 2 (replace Agency Swarm core), Phase 3 (build three specialist agents), and Phase 4 (implement Telegram capability layer with MTProto).
+
 ## 2026-05-10
 
 - Added repository-level pytest configuration in `pyproject.toml` so tests resolve the repo root consistently and `pytest-asyncio` uses an explicit fixture loop scope.

@@ -161,6 +161,17 @@ class SessionManager:
         self.save_workflow_artifact(session, artifact)
         return artifact
 
+    def get_latest_artifact_of_kind(
+        self,
+        session: SessionRecord,
+        kind: WorkflowArtifactKind,
+    ) -> WorkflowArtifact | None:
+        """Return the most recently updated artifact of the given kind, or None."""
+        artifacts = [a for a in self.list_workflow_artifacts(session) if a.kind is kind]
+        if not artifacts:
+            return None
+        return max(artifacts, key=lambda a: a.updated_at)
+
     def _append_message_history(self, session: SessionRecord, role: str, text: str) -> None:
         history = session.workflow_state.setdefault(MESSAGE_HISTORY_KEY, [])
         if not isinstance(history, list):

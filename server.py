@@ -15,9 +15,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 import uvicorn
 
-from agency_swarm.integrations.fastapi import run_fastapi as build_agency_fastapi
-from swarm import create_agency
-from telegram_app import AgencyOrchestratorAdapter, TelegramAppService, run_telegram_polling
+from telegram_app import TelegramAppService, run_telegram_polling
+from telegram_app.orchestrator import PurposeBuiltOrchestrator
 from telegram_app.approvals import ApprovalManager, JsonApprovalStore
 from telegram_app.intake import StructuredIntakeCoordinator
 from telegram_app.sessions import JsonSessionStore, SessionManager
@@ -44,8 +43,7 @@ def create_telegram_app_service(state_dir: str | Path | None = None) -> Telegram
     approval_manager = ApprovalManager(
         JsonApprovalStore(runtime_state_dir / "approvals.json")
     )
-    orchestrator = AgencyOrchestratorAdapter(
-        create_agency,
+    orchestrator = PurposeBuiltOrchestrator(
         session_manager=session_manager,
         approval_manager=approval_manager,
     )
@@ -63,15 +61,6 @@ def build_app() -> FastAPI:
     app = FastAPI(title="TelegramSwarm Runtime")
     app.state.telegram_service = create_telegram_app_service()
     app.state.telegram_bot_client = _create_telegram_bot_client()
-
-    legacy_api = build_agency_fastapi(
-        agencies={"telegram-swarm": create_agency},
-        return_app=True,
-        enable_logging=True,
-        allowed_local_file_dirs=["./uploads"],
-    )
-    if legacy_api is not None:
-        app.mount("/agency", legacy_api)
 
     @app.get("/healthz")
     async def healthcheck() -> dict[str, str]:

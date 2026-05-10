@@ -1,7 +1,9 @@
+from unittest.mock import MagicMock, patch
+
 from telegram_app.discovery import DISCOVERY_JSON_MARKER
 from telegram_app.intake import StructuredIntakeCoordinator, get_campaign_brief_artifact
 from telegram_app.approvals import ApprovalManager, JsonApprovalStore
-from telegram_app.orchestrator_adapter import AgencyOrchestratorAdapter
+from telegram_app.orchestrator import PurposeBuiltOrchestrator
 from telegram_app.models import (
     ApprovalStatus,
     WorkflowArtifactKind,
@@ -180,27 +182,31 @@ Please approve this shortlist or tell me what to change before I move to strateg
 }}
 ```"""
 
-    class FakeRunResult:
-        def __init__(self, final_output: str) -> None:
-            self.final_output = final_output
+    # Build a fake Anthropic API response content block
+    fake_content_block = MagicMock()
+    fake_content_block.text = discovery_output
 
-        def to_input_list(self) -> list[object]:
-            return [{"role": "assistant", "content": "discovery complete"}]
+    fake_api_response = MagicMock()
+    fake_api_response.content = [fake_content_block]
 
-    class FakeAgency:
-        def get_response_sync(self, **_: object) -> FakeRunResult:
-            return FakeRunResult(discovery_output)
-
-    adapter = AgencyOrchestratorAdapter(
-        agency_factory=lambda **_: FakeAgency(),
-        session_manager=session_manager,
-        approval_manager=approval_manager,
+    # Seed message_history so the orchestrator has a current message to work with
+    session.workflow_state.setdefault("message_history", [])
+    session.workflow_state["message_history"].append(
+        {"role": "operator", "content": "continue"}
     )
 
-    response = adapter.handle_turn(
-        session=session,
-        update=TelegramUpdate(chat_id="chat-1", user_id="operator-5", text="continue"),
-    )
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = fake_api_response
+
+    with patch("anthropic.Anthropic", return_value=mock_client):
+        orchestrator = PurposeBuiltOrchestrator(
+            session_manager=session_manager,
+            approval_manager=approval_manager,
+        )
+        response = orchestrator.handle_turn(
+            session=session,
+            update=TelegramUpdate(chat_id="chat-1", user_id="operator-5", text="continue"),
+        )
 
     assert DISCOVERY_JSON_MARKER not in response.messages[0].text
     assert "approve this shortlist" in response.messages[0].text.lower()
