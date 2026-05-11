@@ -8,6 +8,12 @@ from pathlib import Path
 
 import anthropic
 
+from telegram_app.capabilities import (
+    AccountCapability,
+    CommunityCapability,
+    MembershipCapability,
+    MessagingCapability,
+)
 from telegram_app.app_service import OrchestratorTurnHandler
 from telegram_app.approvals import ApprovalManager
 from telegram_app.discovery import (
@@ -17,6 +23,7 @@ from telegram_app.discovery import (
     strip_discovery_json_block,
 )
 from telegram_app.intake import get_workflow_snapshot
+from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import (
     ApprovalRecord,
     ApprovalStatus,
@@ -41,6 +48,9 @@ _APPROVAL_PHRASES = ("go ahead", "sounds good", "looks good", "let's go", "move 
 _REJECTION_PHRASES = ("not quite", "not good", "try again", "start over", "not right")
 _APPROVAL_WORDS = frozenset({"yes", "approve", "approved", "ok", "okay", "confirmed", "confirm", "proceed", "go", "sure", "perfect", "great"})
 _REJECTION_WORDS = frozenset({"no", "reject", "rejected", "change", "revise", "revision", "redo", "modify", "different", "nope", "nah"})
+SHORTLIST_APPROVAL_CATEGORY = "community_shortlist"
+STRATEGY_APPROVAL_CATEGORY = "strategy_playbook"
+ACCOUNT_PLAN_APPROVAL_CATEGORY = "account_assignment_plan"
 
 
 def _load_prompt(name: str) -> str:
@@ -116,9 +126,21 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         self,
         session_manager: SessionManager | None = None,
         approval_manager: ApprovalManager | None = None,
+        community_capability: CommunityCapability | None = None,
+        account_capability: AccountCapability | None = None,
+        membership_capability: MembershipCapability | None = None,
+        messaging_capability: MessagingCapability | None = None,
+        monitor: RuntimeEventLogger | None = None,
+        allow_live_sends: bool = True,
     ) -> None:
         self._session_manager = session_manager
         self._approval_manager = approval_manager
+        self._community_capability = community_capability
+        self._account_capability = account_capability
+        self._membership_capability = membership_capability
+        self._messaging_capability = messaging_capability
+        self._monitor = monitor or NullRuntimeEventLogger()
+        self._allow_live_sends = allow_live_sends
         self._client = anthropic.Anthropic()
 
     # ------------------------------------------------------------------
@@ -130,6 +152,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         session: SessionRecord,
         update: TelegramUpdate,
         pending_approval: ApprovalRecord | None = None,
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         """Run one orchestrator turn, routing to the appropriate specialist."""
         operator_message = update.text or ""
@@ -138,17 +161,33 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
 
         # Approval interpretation takes priority when session is waiting
         if stage is WorkflowStage.WAITING_FOR_APPROVAL and pending_approval is not None:
-            return self._handle_approval_response(session, update, pending_approval, operator_message)
+            return self._handle_approval_response(
+                session,
+                update,
+                pending_approval,
+                operator_message,
+                trace_context=trace_context,
+            )
 
         # Route to specialist agents
         if stage is WorkflowStage.DISCOVERY:
-            return self._run_discovery_agent(session, update, operator_message)
+            return self._run_discovery_agent(session, update, operator_message, trace_context=trace_context)
 
         if stage is WorkflowStage.STRATEGY:
-            return self._run_strategy_agent(session, update)
+            return self._run_strategy_agent(
+                session,
+                update,
+                operator_message=operator_message,
+                trace_context=trace_context,
+            )
 
         if stage is WorkflowStage.ACCOUNT_PLANNING:
-            return self._run_account_manager_agent(session, update)
+            return self._run_account_manager_agent(
+                session,
+                update,
+                operator_message=operator_message,
+                trace_context=trace_context,
+            )
 
         # INTAKE, COMPLETE, or unknown stages — orchestrator handles directly
         return self._run_orchestrator_turn(session, update, pending_approval)
@@ -225,14 +264,22 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         session: SessionRecord,
         update: TelegramUpdate,
         operator_message: str,
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         from agents.discovery.agent import DiscoveryAgent
 
         agent = DiscoveryAgent(
             session_manager=self._session_manager,
             approval_manager=self._approval_manager,
+            community_capability=self._community_capability,
+            messaging_capability=self._messaging_capability,
+            monitor=self._monitor,
         )
-        operator_text, _artifact, _approval = agent.run(session, operator_message)
+        operator_text, _artifact, _approval = agent.run(
+            session,
+            operator_message,
+            trace_context=trace_context,
+        )
         self._append_assistant_reply(session, operator_text)
         return TelegramResponse.single(update.chat_id, operator_text)
 
@@ -240,40 +287,64 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         self,
         session: SessionRecord,
         update: TelegramUpdate,
+        operator_message: str = "",
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         from agents.strategy.agent import StrategyAgent
 
         agent = StrategyAgent(
             session_manager=self._session_manager,
-            approval_manager=self._approval_manager,
+            community_capability=self._community_capability,
+            monitor=self._monitor,
         )
-        operator_text, _artifact = agent.run(session)
+        operator_text, artifact = agent.run(
+            session,
+            operator_message=operator_message,
+            trace_context=trace_context,
+        )
 
-        # Advance stage to ACCOUNT_PLANNING so the next turn routes to AccountManagerAgent
-        if self._session_manager is not None:
-            self._session_manager.replace_workflow_snapshot(
-                session,
-                WorkflowSnapshot(
-                    stage=WorkflowStage.ACCOUNT_PLANNING,
-                    summary="Strategy playbook produced. Ready for account assignment planning.",
-                ),
-            )
+        if artifact is None or self._session_manager is None or self._approval_manager is None:
+            self._append_assistant_reply(session, operator_text)
+            return TelegramResponse.single(update.chat_id, operator_text)
 
-        self._append_assistant_reply(session, operator_text)
-        return TelegramResponse.single(update.chat_id, operator_text)
+        approval = self._approval_manager.create_pending(
+            session_id=session.session_id,
+            category=STRATEGY_APPROVAL_CATEGORY,
+            prompt="Approve this strategy to generate the account plan, or tell me what to change.",
+            context={
+                "artifact_id": artifact.artifact_id,
+                "community_count": len(artifact.data.get("communities", [])),
+            },
+        )
+        self._session_manager.mark_pending_approval(session, approval.approval_id)
+
+        response_text = (
+            f"{operator_text}\n\n"
+            "Approve this strategy to generate the account plan, or tell me what to change."
+        )
+        self._append_assistant_reply(session, response_text)
+        return TelegramResponse.single(update.chat_id, response_text)
 
     def _run_account_manager_agent(
         self,
         session: SessionRecord,
         update: TelegramUpdate,
+        operator_message: str = "",
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         from agents.account_manager.agent import AccountManagerAgent
 
         agent = AccountManagerAgent(
             session_manager=self._session_manager,
             approval_manager=self._approval_manager,
+            account_capability=self._account_capability,
+            monitor=self._monitor,
         )
-        operator_text, _artifact, _approval = agent.run(session)
+        operator_text, _artifact, _approval = agent.run(
+            session,
+            operator_message=operator_message,
+            trace_context=trace_context,
+        )
         self._append_assistant_reply(session, operator_text)
         return TelegramResponse.single(update.chat_id, operator_text)
 
@@ -287,20 +358,43 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         update: TelegramUpdate,
         pending_approval: ApprovalRecord,
         operator_message: str,
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         """Interpret operator approval/rejection; advance or revert workflow."""
         is_approved = _classify_approval_response(operator_message)
 
         if is_approved is None:
+            if pending_approval.category == STRATEGY_APPROVAL_CATEGORY:
+                response_text = (
+                    "I’m holding at the strategy checkpoint. Reply `approve` to generate the account plan, "
+                    "or tell me what to change in the strategy."
+                )
+                self._append_assistant_reply(session, response_text)
+                return TelegramResponse.single(update.chat_id, response_text)
+
             # Ambiguous message — let the orchestrator's Claude call interpret it
             return self._run_orchestrator_turn(session, update, pending_approval)
 
         category = pending_approval.category
 
         if is_approved:
-            return self._handle_approved(session, update, pending_approval, category, operator_message)
+            return self._handle_approved(
+                session,
+                update,
+                pending_approval,
+                category,
+                operator_message,
+                trace_context=trace_context,
+            )
         else:
-            return self._handle_rejected(session, update, pending_approval, category, operator_message)
+            return self._handle_rejected(
+                session,
+                update,
+                pending_approval,
+                category,
+                operator_message,
+                trace_context=trace_context,
+            )
 
     def _handle_approved(
         self,
@@ -309,13 +403,14 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         pending_approval: ApprovalRecord,
         category: str,
         operator_message: str,
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         if self._approval_manager is not None:
             self._approval_manager.resolve(pending_approval, ApprovalStatus.APPROVED, note=operator_message)
         session.pending_approval_id = None
         session.status = SessionStatus.ACTIVE
 
-        if category == "community_shortlist":
+        if category == SHORTLIST_APPROVAL_CATEGORY:
             # Advance to STRATEGY and run strategy agent inline
             if self._session_manager is not None:
                 self._session_manager.replace_workflow_snapshot(
@@ -326,9 +421,21 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                     ),
                 )
                 self._session_manager.save_session(session)
-            return self._run_strategy_agent(session, update)
+            return self._run_strategy_agent(session, update, trace_context=trace_context)
 
-        if category == "account_assignment_plan":
+        if category == STRATEGY_APPROVAL_CATEGORY:
+            if self._session_manager is not None:
+                self._session_manager.replace_workflow_snapshot(
+                    session,
+                    WorkflowSnapshot(
+                        stage=WorkflowStage.ACCOUNT_PLANNING,
+                        summary="Strategy approved. Generating account assignment plan.",
+                    ),
+                )
+                self._session_manager.save_session(session)
+            return self._run_account_manager_agent(session, update, trace_context=trace_context)
+
+        if category == ACCOUNT_PLAN_APPROVAL_CATEGORY:
             # Advance to COMPLETE
             if self._session_manager is not None:
                 self._session_manager.replace_workflow_snapshot(
@@ -356,13 +463,14 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         pending_approval: ApprovalRecord,
         category: str,
         operator_message: str,
+        trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
         if self._approval_manager is not None:
             self._approval_manager.resolve(pending_approval, ApprovalStatus.REJECTED, note=operator_message)
         session.pending_approval_id = None
         session.status = SessionStatus.ACTIVE
 
-        if category == "community_shortlist":
+        if category == SHORTLIST_APPROVAL_CATEGORY:
             # Revert to DISCOVERY for a revised shortlist
             if self._session_manager is not None:
                 self._session_manager.replace_workflow_snapshot(
@@ -373,9 +481,26 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                     ),
                 )
                 self._session_manager.save_session(session)
-            return self._run_discovery_agent(session, update, operator_message)
+            return self._run_discovery_agent(session, update, operator_message, trace_context=trace_context)
 
-        if category == "account_assignment_plan":
+        if category == STRATEGY_APPROVAL_CATEGORY:
+            if self._session_manager is not None:
+                self._session_manager.replace_workflow_snapshot(
+                    session,
+                    WorkflowSnapshot(
+                        stage=WorkflowStage.STRATEGY,
+                        summary="Strategy review paused. Waiting for operator revisions.",
+                    ),
+                )
+                self._session_manager.save_session(session)
+            response_text = (
+                "I kept the workflow at strategy. Tell me what to change in the playbook, "
+                "and I’ll revise it before we move to account planning."
+            )
+            self._append_assistant_reply(session, response_text)
+            return TelegramResponse.single(update.chat_id, response_text)
+
+        if category == ACCOUNT_PLAN_APPROVAL_CATEGORY:
             # Revert to ACCOUNT_PLANNING for a revised plan
             if self._session_manager is not None:
                 self._session_manager.replace_workflow_snapshot(
@@ -386,7 +511,12 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                     ),
                 )
                 self._session_manager.save_session(session)
-            return self._run_account_manager_agent(session, update)
+            return self._run_account_manager_agent(
+                session,
+                update,
+                operator_message=operator_message,
+                trace_context=trace_context,
+            )
 
         # Unknown category — fall back to orchestrator without approval context
         if self._session_manager is not None:

@@ -9,8 +9,11 @@ from pathlib import Path
 
 import anthropic
 
+from telegram_app.capabilities import CommunityCapability
+from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import SessionRecord, WorkflowArtifact, WorkflowArtifactKind
 from telegram_app.sessions import SessionManager
+from telegram_app.workflow_validation import parse_marked_json_block, validate_strategy_playbook
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,49 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 STRATEGY_PLAYBOOK_JSON_MARKER = "STRATEGY_PLAYBOOK_JSON"
+PROMPT_SAFE_CAMPAIGN_BRIEF_KEYS = (
+    "objective",
+    "target_audience",
+    "offer",
+    "geography",
+    "language",
+    "constraints",
+    "success_criteria",
+    "notes",
+)
+PROMPT_SAFE_SHORTLIST_KEYS = (
+    "name",
+    "handle",
+    "community_id",
+    "type",
+    "topic",
+    "language",
+    "geography",
+    "relevance_score",
+    "promo_tolerance",
+    "moderation_risk",
+    "reason",
+    "source_notes",
+    "member_count",
+    "verified",
+    "restricted",
+    "scam",
+    "recent_activity_summary",
+    "recent_tone_summary",
+)
+PROMPT_SAFE_PROFILE_KEYS = (
+    "community_id",
+    "name",
+    "username",
+    "type",
+    "member_count",
+    "verified",
+    "restricted",
+    "scam",
+    "description",
+    "linked_chat_id",
+    "slowmode_seconds",
+)
 
 
 def _load_prompt(name: str) -> str:
@@ -50,14 +96,25 @@ class StrategyAgent:
     def __init__(
         self,
         session_manager: SessionManager | None = None,
-        approval_manager: object = None,
+        community_capability: CommunityCapability | None = None,
+        monitor: RuntimeEventLogger | None = None,
     ) -> None:
         self._session_manager = session_manager
-        self._approval_manager = approval_manager
+        self._community_capability = community_capability
+        self._monitor = monitor or NullRuntimeEventLogger()
         self._client = anthropic.Anthropic()
 
-    def run(self, session: SessionRecord) -> tuple[str, WorkflowArtifact | None]:
+    def run(
+        self,
+        session: SessionRecord,
+        operator_message: str = "",
+        trace_context: RuntimeTraceContext | None = None,
+    ) -> tuple[str, WorkflowArtifact | None]:
         """Run strategy turn. Returns (operator_text, strategy_artifact)."""
+        trace_context = (
+            trace_context
+            or RuntimeTraceContext(trace_id="", session_id=session.session_id, user_id=session.operator_id)
+        ).with_session(session)
         context_lines = ["Strategy context:"]
         if self._session_manager is not None:
             for kind, label in [
@@ -67,10 +124,13 @@ class StrategyAgent:
                 artifact = _get_latest_artifact_of_kind(self._session_manager, session, kind)
                 if artifact is not None:
                     context_lines.append(
-                        f"{label}: {json.dumps(artifact.data, ensure_ascii=True)}"
+                        f"{label}: {json.dumps(_prompt_safe_artifact_data(kind, artifact.data), ensure_ascii=True)}"
                     )
+        if operator_message.strip():
+            context_lines.append(f"Operator revision context: {operator_message.strip()}")
 
-        user_content = "\n".join(context_lines) + "\n\nPlease produce the strategy playbook."
+        capability_context = self._build_capability_context(session)
+        user_content = "\n".join(context_lines + capability_context) + "\n\nPlease produce the strategy playbook."
 
         system = [
             {"type": "text", "text": _load_prompt("strategy.md")},
@@ -80,13 +140,34 @@ class StrategyAgent:
 
         model = _resolve_model()
         logger.info("StrategyAgent calling Anthropic API model=%s", model)
-
-        api_response = self._client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=system,
-            messages=messages,
+        self._monitor.record_event(
+            component="strategy_agent",
+            event_type="llm_request",
+            trace_context=trace_context,
+            session=session,
+            payload={
+                "model": model,
+                "prompt_assets": ["strategy.md", "shared_runtime.md"],
+                "messages": messages,
+            },
         )
+
+        try:
+            api_response = self._client.messages.create(
+                model=model,
+                max_tokens=4096,
+                system=system,
+                messages=messages,
+            )
+        except Exception as exc:
+            self._monitor.record_event(
+                component="strategy_agent",
+                event_type="llm_failed",
+                trace_context=trace_context,
+                session=session,
+                payload={"model": model, "error": str(exc), "error_type": type(exc).__name__},
+            )
+            raise
 
         final_output = "".join(
             block.text for block in api_response.content if hasattr(block, "text")
@@ -94,9 +175,12 @@ class StrategyAgent:
 
         playbook_data = self._parse_playbook_json(final_output)
         operator_text = self._strip_json_block(final_output)
+        validation_error = validate_strategy_playbook(playbook_data)
 
         artifact: WorkflowArtifact | None = None
-        if self._session_manager is not None:
+        if validation_error is not None:
+            operator_text = self._build_invalid_playbook_response(operator_text, validation_error)
+        elif self._session_manager is not None:
             playbook_summary = str(playbook_data.get("campaign_strategy_summary", "Strategy playbook ready."))
             existing = _get_latest_artifact_of_kind(
                 self._session_manager, session, WorkflowArtifactKind.STRATEGY_PLAYBOOK
@@ -115,26 +199,120 @@ class StrategyAgent:
                     data=playbook_data,
                 )
 
+        self._monitor.record_event(
+            component="strategy_agent",
+            event_type="llm_response",
+            trace_context=trace_context,
+            session=session,
+            payload={
+                "model": model,
+                "output_text": final_output,
+                "operator_text": operator_text,
+                "artifact_id": artifact.artifact_id if artifact is not None else "",
+                "validation_error": validation_error or "",
+            },
+        )
         return operator_text, artifact
 
+    def _build_capability_context(self, session: SessionRecord) -> list[str]:
+        if self._session_manager is None or self._community_capability is None:
+            return ["Community capability context: unavailable"]
+
+        shortlist = _get_latest_artifact_of_kind(
+            self._session_manager,
+            session,
+            WorkflowArtifactKind.COMMUNITY_SHORTLIST,
+        )
+        if shortlist is None:
+            return ["Community capability context: no shortlist available"]
+
+        profile_snapshots: list[dict[str, object]] = []
+        for community in shortlist.data.get("communities", []):
+            if not isinstance(community, dict):
+                continue
+
+            community_id = str(community.get("handle") or community.get("name") or "").strip()
+            if not community_id:
+                continue
+
+            profile_result = self._community_capability.get_profile(community_id)
+            if not profile_result.success:
+                continue
+
+            profile_snapshots.append(
+                {
+                    "community_id": community_id,
+                    "data": _prompt_safe_profile_data(profile_result.data),
+                }
+            )
+            if len(profile_snapshots) >= 5:
+                break
+
+        if not profile_snapshots:
+            return ["Community capability context: no live profiles available yet"]
+
+        return [
+            "Community capability context:",
+            json.dumps(profile_snapshots, ensure_ascii=True),
+        ]
+
     def _parse_playbook_json(self, output: str) -> dict:
-        if STRATEGY_PLAYBOOK_JSON_MARKER not in output:
-            return {"raw_output": output}
-        _, _, remainder = output.partition(STRATEGY_PLAYBOOK_JSON_MARKER)
-        remainder = remainder.strip()
-        if remainder.startswith("```json"):
-            remainder = remainder[len("```json"):].strip()
-        elif remainder.startswith("```"):
-            remainder = remainder[3:].strip()
-        if remainder.endswith("```"):
-            remainder = remainder[:-3].strip()
-        try:
-            return json.loads(remainder)
-        except json.JSONDecodeError:
-            return {"raw_output": output}
+        return parse_marked_json_block(output, STRATEGY_PLAYBOOK_JSON_MARKER) or {}
 
     def _strip_json_block(self, output: str) -> str:
         if STRATEGY_PLAYBOOK_JSON_MARKER not in output:
             return output.strip()
         operator_text, _, _ = output.partition(STRATEGY_PLAYBOOK_JSON_MARKER)
         return operator_text.strip()
+
+    def _build_invalid_playbook_response(self, operator_text: str, validation_error: str) -> str:
+        summary = operator_text.strip() or "I generated a strategy draft, but I could not trust its structured output."
+        return (
+            f"{summary}\n\n"
+            "I did not save or advance this strategy because its machine-readable playbook was incomplete. "
+            f"{validation_error} Please ask me to retry the strategy step."
+        )
+
+
+def _prompt_safe_artifact_data(kind: WorkflowArtifactKind, data: dict) -> dict:
+    if kind is WorkflowArtifactKind.CAMPAIGN_BRIEF:
+        return {
+            key: value
+            for key, value in data.items()
+            if key in PROMPT_SAFE_CAMPAIGN_BRIEF_KEYS and value not in ("", [], {}, None)
+        }
+
+    if kind is WorkflowArtifactKind.COMMUNITY_SHORTLIST:
+        communities = data.get("communities", [])
+        compact_communities = [
+            {
+                key: community.get(key)
+                for key in PROMPT_SAFE_SHORTLIST_KEYS
+                if community.get(key) not in ("", [], {}, None)
+            }
+            for community in communities
+            if isinstance(community, dict)
+        ]
+        compact_payload = {
+            "summary": data.get("summary"),
+            "recommended_next_step": data.get("recommended_next_step"),
+            "communities": compact_communities,
+        }
+        return {
+            key: value
+            for key, value in compact_payload.items()
+            if value not in ("", [], {}, None)
+        }
+
+    return data
+
+
+def _prompt_safe_profile_data(data: dict) -> dict:
+    community = data.get("community", {}) if isinstance(data, dict) else {}
+    if not isinstance(community, dict):
+        return {}
+    return {
+        key: community.get(key)
+        for key in PROMPT_SAFE_PROFILE_KEYS
+        if community.get(key) not in ("", [], {}, None)
+    }
