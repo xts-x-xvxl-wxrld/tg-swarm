@@ -12,6 +12,7 @@ from telegram_app.models import (
     SessionRecord,
     WorkflowArtifact,
     WorkflowArtifactKind,
+    WorkflowSnapshot,
     WorkflowStage,
 )
 from telegram_app.sessions import SessionManager
@@ -41,8 +42,8 @@ def build_discovery_runtime_instructions(session: SessionRecord) -> str:
     lines = [
         "Discovery workflow instructions:",
         "- This session is in the discovery stage.",
-        "- Use Deep Research Agent if web research is needed.",
         "- Produce a shortlist of Telegram communities that match the stored campaign brief.",
+        "- Prefer live Telegram capability data when it is available.",
         "- Return a concise operator-facing summary first.",
         "- Ask the operator to approve the shortlist or request changes.",
         f"- Then append a line containing exactly `{DISCOVERY_JSON_MARKER}`.",
@@ -53,7 +54,8 @@ def build_discovery_runtime_instructions(session: SessionRecord) -> str:
             '"communities":[{"name":"...","handle":"...","type":"group|channel",'
             '"topic":"...","language":"...","geography":"...","relevance_score":0,'
             '"promo_tolerance":"low|medium|high","moderation_risk":"low|medium|high",'
-            '"reason":"...","source_notes":["..."]}]}'
+            '"reason":"...","verification_state":"live_confirmed|search_confirmed|training_knowledge_fallback",'
+            '"source_notes":["..."]}]}'
         ),
         "- Keep the JSON valid and do not include trailing commentary after the JSON block.",
     ]
@@ -96,17 +98,21 @@ def strip_discovery_json_block(final_output: str) -> str:
 
 def persist_discovery_shortlist(
     session_manager: SessionManager,
-    approval_manager: ApprovalManager,
+    approval_manager: ApprovalManager | None,
     session: SessionRecord,
     shortlist_payload: dict[str, Any],
-) -> tuple[WorkflowArtifact, ApprovalRecord]:
-    """Persist the discovery shortlist and create the approval needed to proceed."""
+) -> tuple[WorkflowArtifact, ApprovalRecord | None]:
+    """Persist the discovery shortlist and keep discovery open for conversational review."""
     artifact = _find_existing_shortlist(session_manager, session)
     communities = shortlist_payload.get("communities", [])
     summary = str(shortlist_payload.get("summary", "")).strip() or _build_shortlist_summary(communities)
     data = {
         "summary": summary,
         "recommended_next_step": str(shortlist_payload.get("recommended_next_step", "")).strip(),
+        "verification_summary": str(shortlist_payload.get("verification_summary", "")).strip(),
+        "coverage_summary": str(shortlist_payload.get("coverage_summary", "")).strip(),
+        "verification_counts": shortlist_payload.get("verification_counts", {}),
+        "search_diagnostics": shortlist_payload.get("search_diagnostics", {}),
         "communities": communities,
     }
 
@@ -123,23 +129,19 @@ def persist_discovery_shortlist(
         artifact.data = data
         session_manager.save_workflow_artifact(session, artifact)
 
-    top_names = [
-        community.get("name", "")
-        for community in communities[:3]
-        if isinstance(community, dict) and community.get("name")
-    ]
-    approval = approval_manager.create_pending(
-        session_id=session.session_id,
-        category=APPROVAL_CATEGORY,
-        prompt="Approve this community shortlist so I can move to strategy, or tell me what to change.",
-        context={
-            "artifact_id": artifact.artifact_id,
-            "community_count": len(communities),
-            "top_communities": top_names,
-        },
+    session.pending_approval_id = None
+    session_manager.replace_workflow_snapshot(
+        session,
+        WorkflowSnapshot(
+            stage=WorkflowStage.DISCOVERY,
+            summary="Community shortlist ready for operator review.",
+            data={
+                "community_shortlist_artifact_id": artifact.artifact_id,
+                "community_count": len(communities),
+            },
+        ),
     )
-    session_manager.mark_pending_approval(session, approval.approval_id)
-    return artifact, approval
+    return artifact, None
 
 
 def _find_existing_shortlist(

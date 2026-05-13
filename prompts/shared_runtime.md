@@ -24,12 +24,14 @@ These instructions apply to every active agent in the Telegram-native runtime.
 
 ## Current Active Roster
 
-The active default path is intentionally narrow for now:
+The active Telegram runtime path is:
 
 - **Orchestrator**: session-level control brain
-- **Deep Research Agent**: evidence-based research specialist
+- **Discovery Agent**: Telegram community discovery and live enrichment
+- **Strategy Agent**: community-aware playbook generation
+- **Account Manager Agent**: account assignment planning and execution preparation
 
-Other legacy agent folders may remain in the repo, but they are not part of the default Telegram runtime path yet.
+Other legacy agent folders may remain in the repo, but they are not part of the live Telegram runtime path.
 
 ## Agent Collaboration
 

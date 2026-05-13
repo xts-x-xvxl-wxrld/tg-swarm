@@ -24,6 +24,10 @@ class SessionRecord:
 
     session_id: str
     operator_id: str
+    campaign_id: str | None = None
+    campaign_workspace_path: str | None = None
+    canonical_memory_files: list[str] = field(default_factory=list)
+    agent_memory_files: list[str] = field(default_factory=list)
     status: SessionStatus = SessionStatus.NEW
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -41,6 +45,10 @@ class SessionRecord:
         return {
             "session_id": self.session_id,
             "operator_id": self.operator_id,
+            "campaign_id": self.campaign_id,
+            "campaign_workspace_path": self.campaign_workspace_path,
+            "canonical_memory_files": list(self.canonical_memory_files),
+            "agent_memory_files": list(self.agent_memory_files),
             "status": self.status.value,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -58,9 +66,15 @@ class SessionRecord:
         status = SessionStatus._value2member_map_.get(raw_status, SessionStatus.NEW)
         workflow_state = payload.get("workflow_state", {})
         linked_entity_ids = payload.get("linked_entity_ids", {})
+        canonical_memory_files = payload.get("canonical_memory_files", [])
+        agent_memory_files = payload.get("agent_memory_files", [])
         return cls(
             session_id=str(payload.get("session_id", "")),
             operator_id=str(payload.get("operator_id", "")),
+            campaign_id=payload.get("campaign_id"),
+            campaign_workspace_path=payload.get("campaign_workspace_path"),
+            canonical_memory_files=list(canonical_memory_files) if isinstance(canonical_memory_files, list) else [],
+            agent_memory_files=list(agent_memory_files) if isinstance(agent_memory_files, list) else [],
             status=status,
             created_at=datetime.fromisoformat(payload["created_at"])
             if payload.get("created_at")

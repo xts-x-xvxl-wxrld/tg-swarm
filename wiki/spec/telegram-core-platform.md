@@ -6,25 +6,29 @@ Build a Telegram-native autonomous agent platform where a human operator interac
 
 This platform is broader than any single workflow. Marketing is the first operating mode, not the whole product.
 
+This document should be read alongside [Campaign Operations Model](C:/Users/ravil/OneDrive/Desktop/tg-swarm/wiki/spec/campaign-operations-model.md), which defines the current source-of-truth operating shape for campaigns, delegated work, memory, and scheduling.
+
 ## Product Statement
 
-This app exists to let an operator manage autonomous agent workflows through Telegram itself.
+This app exists to let an operator manage autonomous agent campaign operations through Telegram itself.
 
 The system should:
 
 - receive operator intent through a Telegram bot
-- maintain session context
+- maintain session and campaign context
 - coordinate specialist agents
+- support delegated work and recurring operational cadence
 - give agents broad access to Telegram functionality
 - allow the first workflow package to focus on community-driven growth use cases
 
 ## Core Principles
 
 - Telegram capability is the foundation.
-- Workflow specialization sits on top of the platform.
+- Campaign operations sit on top of the platform.
 - The operator interface stays intentionally simple at first.
 - Agent autonomy is shaped mostly by prompts, role definitions, and shared rules.
 - Guardrails should be documented now and enforced later.
+- Campaigns, not one-off chat sessions alone, should be the durable operational objects.
 
 ## Operator Interaction Model
 
@@ -45,6 +49,7 @@ The operator should be able to:
 - describe a goal in plain language
 - ask follow-up questions
 - review results
+- review recurring campaign updates
 - respond to approval requests
 - receive summaries and status updates
 
@@ -65,11 +70,25 @@ Responsibilities:
 
 - interpret operator intent
 - create and manage session context
+- attach work to durable campaign context
 - choose which agents should think or act
+- assign campaign goals rather than scripting every tactical substep
+- schedule recurring review, discovery, and maintenance work
 - gather outputs into coherent responses
-- maintain continuity across a session
+- maintain continuity across sessions and campaign cycles
 
-### 3. Telegram Capability Layer
+### 3. Campaign Memory And Work Coordination
+
+Responsibilities:
+
+- persist durable campaign memory
+- distinguish shared campaign memory from agent-local working memory
+- support work-item based delegation
+- support recurring schedules and campaign review cadence
+
+This layer makes the platform operational over time rather than only conversational turn by turn.
+
+### 4. Telegram Capability Layer
 
 Responsibilities:
 
@@ -79,13 +98,15 @@ Responsibilities:
 
 This is the core reusable platform layer.
 
-### 4. Specialist Agents
+### 5. Specialist Agents
 
 Responsibilities:
 
 - operate according to their role prompts
 - use Telegram capabilities when needed
-- collaborate through the orchestrator and shared context
+- collaborate through the orchestrator and shared campaign context
+- own tactical execution inside their domain
+- maintain domain working memory and promote durable findings into campaign memory when appropriate
 
 These agents should not be overly boxed into tiny task-only capabilities. They are role-based operators with broad access and different priorities.
 
@@ -101,6 +122,12 @@ The intended model is:
 This means the system should favor behavioral guidance over deep capability partitioning.
 
 The goal is not to make each agent able to do only one narrow step. The goal is to let each agent act flexibly while still optimizing for its role.
+
+The responsibility split should be:
+
+- operator decides direction and constraints
+- orchestrator decides priorities and delegation
+- specialists decide tactical substeps inside scope
 
 ## Telegram Capability Categories
 
@@ -132,21 +159,27 @@ The platform should eventually support these capability families:
 
 - log actions
 - read prior session history
+- read prior campaign state
 - inspect community/account state
-- expose structured records for later workflows
+- expose structured records for later campaign work, schedules, and reviews
 
 ## Session Model
 
 A session is an operator-driven thread of work that begins with `/new`.
 
+It should be treated as the conversational interface into a campaign, not the full durable campaign object itself.
+
 Each session should eventually hold:
 
 - operator intent
+- campaign linkage
 - orchestrator reasoning context
 - relevant communities
 - relevant accounts
 - decisions made so far
 - outputs produced so far
+
+Campaigns should hold the longer-lived operating memory that survives across multiple sessions.
 
 This does not yet define the final persistence implementation, only the operating concept.
 
@@ -192,6 +225,14 @@ Its initial emphasis is:
 
 This operating mode depends on the Telegram core platform but should not define the whole platform.
 
+Its runtime shape should follow the newer campaign-operations model:
+
+- the operator acts like a manager
+- the orchestrator acts like a campaign manager
+- specialists act like tactically autonomous workers
+- campaigns persist across sessions
+- recurring work is scheduled over time
+
 ## Success Criteria
 
 The platform model is correct when:
@@ -199,8 +240,9 @@ The platform model is correct when:
 1. A human can operate the system from Telegram with very little UI complexity.
 2. The orchestrator can receive and manage freeform intent.
 3. Specialist agents can use Telegram broadly without being artificially boxed into tiny task silos.
-4. The platform is reusable for workflows beyond marketing.
-5. The first workflow package can be implemented without redesigning the platform.
+4. The platform can support long-lived campaign memory, delegated work, and recurring operating cadence.
+5. The platform is reusable for workflows beyond marketing.
+6. The first workflow package can be implemented without redesigning the platform.
 
 ## Open Questions
 

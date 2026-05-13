@@ -10,7 +10,7 @@ This operating mode should help:
 2. Decide what message and campaign angle fits each community.
 3. Manage which accounts join which communities and under what pacing/risk limits.
 
-This is not the whole product. It is the first workflow package built on the broader Telegram-native agent platform.
+This is not the whole product. It is the first campaign operating package built on the broader Telegram-native agent platform.
 
 ## Product Framing
 
@@ -42,6 +42,8 @@ The broader platform provides:
 
 This MVP provides the first role emphasis on top of that foundation.
 
+It should also align with [Campaign Operations Model](C:/Users/ravil/OneDrive/Desktop/tg-swarm/wiki/spec/campaign-operations-model.md), which defines the manager-versus-worker operating shape, campaign memory, work items, and scheduling model.
+
 ## MVP Scope
 
 ### In Scope
@@ -49,6 +51,8 @@ This MVP provides the first role emphasis on top of that foundation.
 - Telegram community discovery and qualification
 - Campaign strategy and message planning
 - Account inventory, assignment, warm-up, pacing, and safety controls
+- Campaign memory updates and durable planning continuity
+- Scheduled re-review of discovery, strategy, and readiness
 - Community research summaries
 - Community-specific campaign playbooks
 - Planned approval points and safety checkpoints
@@ -87,6 +91,7 @@ The MVP must answer these three questions well:
 - Classify communities by topic, language, geography, audience type, and activity
 - Score each community for relevance, accessibility, and promotional risk
 - Produce a short research brief for each recommended community
+- Refresh stale discovery coverage over time and surface new opportunities
 
 #### Inputs
 
@@ -109,6 +114,7 @@ The MVP must answer these three questions well:
 - Define audience segments and matching talking points
 - Recommend value-first entry tactics and CTA strength
 - Produce a playbook for each approved community segment
+- Revisit positioning when new evidence changes the campaign context
 
 #### Inputs
 
@@ -132,6 +138,7 @@ The MVP must answer these three questions well:
 - Decide which account should join which community
 - Plan warm-up rules, cooldowns, join pacing, and action limits
 - Record membership state and risk events
+- Maintain execution readiness and blocked-versus-ready action visibility
 
 #### Inputs
 
@@ -159,6 +166,12 @@ Instead:
 
 This means the three roles define emphasis and decision-making style more than strict capability walls.
 
+They should also operate as tactically autonomous workers under orchestrator-level strategic direction:
+
+- the orchestrator decides what work should happen and why
+- specialists decide how to execute domain work within scope
+- specialists maintain tactical working memory and update shared campaign memory when findings become durable
+
 ## Planned Guardrails
 
 The following guardrails should be part of the operating model but are not yet planned as enforced controls:
@@ -170,32 +183,42 @@ The following guardrails should be part of the operating model but are not yet p
 - no automatic high-volume joins or writes without later-defined safety controls
 - escalate ambiguous, sensitive, or high-risk communities to a human
 
-## End-to-End MVP Workflow
+## Operating Shape
 
-### Workflow A: Discovery
+The MVP should no longer be treated only as a one-pass linear workflow.
+
+It should support two interacting modes:
+
+### Setup Path
+
+The initial setup path may still feel sequential:
 
 1. Operator provides campaign brief.
-2. Discovery Agent finds candidate communities.
-3. Discovery Agent scores and summarizes each one.
-4. Human or orchestrator approves a shortlist, if approvals are required by the eventual guardrail layer.
+2. The system builds the initial campaign frame.
+3. Discovery establishes an initial community picture.
+4. Strategy establishes an initial positioning and participation posture.
+5. Account planning establishes initial readiness and constraints.
 
-### Workflow B: Strategy
+### Ongoing Operations
 
-1. Strategy Agent reads the campaign brief and community shortlist.
-2. Strategy Agent groups communities into segments.
-3. Strategy Agent writes message angles and community-specific participation guidance.
-4. Human reviews the initial playbook when appropriate.
+After setup, the campaign should operate continuously through:
 
-### Workflow C: Account Planning
+- recurring discovery refresh
+- strategy review and refinement
+- account-readiness review
+- work-item delegation across specialists
+- campaign-memory updates
+- operator review of significant changes
 
-1. Account Manager reads the approved shortlist and strategy guidance.
-2. Account Manager selects appropriate accounts for each community.
-3. Account Manager creates a join/warm-up plan with timing constraints.
-4. System records assignments and monitors account safety.
+Discovery, strategy, and account planning should therefore be understood as recurring work families rather than one-time pipeline steps.
 
 ## Minimal Data Model
 
-The MVP should persist at least these entities or their conceptual equivalents:
+The MVP should persist at least these entities or their conceptual equivalents.
+
+This should not be read as a mandate for a rigid normalized database-first implementation. File-backed campaign memory and lightweight structured metadata are acceptable as long as these concepts remain durable and retrievable.
+
+The campaign should be the durable root object for downstream work items, schedules, approvals, assignments, and later execution records.
 
 ### `campaigns`
 
@@ -209,6 +232,7 @@ The MVP should persist at least these entities or their conceptual equivalents:
 - constraints
 - success criteria
 - status
+- canonical memory references
 
 ### `communities`
 
@@ -273,6 +297,29 @@ The MVP should persist at least these entities or their conceptual equivalents:
 - CTA style
 - approval_status
 
+### `work_items`
+
+- id
+- campaign_id
+- owner_role
+- goal
+- constraints
+- priority
+- status
+- due_at
+- related_memory_refs
+- result_summary
+
+### `schedules`
+
+- id
+- campaign_id
+- schedule_type
+- cadence
+- owner_role
+- next_run_at
+- status
+
 ## MVP Success Criteria
 
 The MVP is successful when it can:
@@ -280,15 +327,15 @@ The MVP is successful when it can:
 1. Produce a ranked list of relevant Telegram communities for a campaign.
 2. Produce a usable campaign/message plan for those communities.
 3. Produce a safe account assignment and join plan.
-4. Keep enough structured state that later engagement automation is possible.
+4. Keep enough durable campaign state and memory that later engagement automation is possible.
+5. Revisit discovery, strategy, and planning over time without restarting the campaign from scratch.
 
 ## Design Principles
 
 - Keep the marketing mode layered on top of the Telegram core instead of baking Telegram logic directly into every workflow.
 - Favor role-based autonomy over hard capability partitioning.
-- Store structured outputs so later operator sessions and workflows can reuse them.
+- Store durable campaign outputs so later operator sessions and scheduled work can reuse them.
 - Treat guardrails as planned controls even before they are enforced.
-
 - Keep agent roles narrow and legible.
 - Separate read-heavy workflows from write-heavy workflows.
 - Require structured outputs, not just chat responses.

@@ -20,9 +20,9 @@ class TelegramResponse:
 
     chat_id: str
     messages: list[TelegramMessage] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def single(cls, chat_id: str, text: str) -> "TelegramResponse":
         """Create a response with one plain-text message."""
         return cls(chat_id=chat_id, messages=[TelegramMessage(text=text)])
-

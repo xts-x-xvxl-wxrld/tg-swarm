@@ -184,3 +184,7 @@ cython_debug/
 .agency_swarm/
 third_party/
 .claude/
+data/accounts.json
+data/sessions/
+activity-logs/
+.pytest-tmp*/

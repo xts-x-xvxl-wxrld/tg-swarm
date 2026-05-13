@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from uuid import uuid4
 
 from telegram_app.models import (
@@ -16,7 +15,6 @@ from telegram_app.models import (
 from telegram_app.sessions.session_store import SessionStore
 from telegram_app.transport.telegram_responses import TelegramResponse
 
-AGENCY_HISTORY_KEY = "agency_history"
 MESSAGE_HISTORY_KEY = "message_history"
 WORKFLOW_SNAPSHOT_KEY = "workflow_snapshot"
 WORKFLOW_ARTIFACTS_KEY = "workflow_artifacts"
@@ -35,7 +33,6 @@ class SessionManager:
             operator_id=operator_id,
             status=SessionStatus.NEW,
             workflow_state={
-                AGENCY_HISTORY_KEY: [],
                 MESSAGE_HISTORY_KEY: [],
                 WORKFLOW_SNAPSHOT_KEY: WorkflowSnapshot(
                     stage=WorkflowStage.INTAKE,
@@ -49,6 +46,16 @@ class SessionManager:
     def get_active_session(self, operator_id: str) -> SessionRecord | None:
         """Fetch the active session for an operator."""
         return self._store.get_active_for_operator(operator_id)
+
+    def list_sessions_for_campaign(self, campaign_id: str) -> list[SessionRecord]:
+        """Return all sessions attached to a campaign, newest first."""
+        sessions = self._store.list_for_campaign(campaign_id)
+        return sorted(sessions, key=lambda session: session.updated_at, reverse=True)
+
+    def get_latest_session_for_campaign(self, campaign_id: str) -> SessionRecord | None:
+        """Return the most recently updated session attached to a campaign."""
+        sessions = self.list_sessions_for_campaign(campaign_id)
+        return sessions[0] if sessions else None
 
     def record_operator_message(self, session: SessionRecord, message: str) -> SessionRecord:
         """Persist the latest operator message and mark the session active."""
@@ -65,20 +72,30 @@ class SessionManager:
         session.touch()
         return self._store.update(session)
 
-    def get_agency_history(self, session: SessionRecord) -> list[object]:
-        """Return the stored Agency Swarm input history for a session."""
-        history = session.workflow_state.get(AGENCY_HISTORY_KEY, [])
-        if not isinstance(history, list):
-            return []
-        return list(history)
-
-    def replace_agency_history(
+    def attach_campaign(
         self,
         session: SessionRecord,
-        history: Sequence[object],
+        campaign_id: str,
+        campaign_workspace_path: str,
+        *,
+        canonical_memory_files: list[str] | None = None,
+        agent_memory_files: list[str] | None = None,
     ) -> SessionRecord:
-        """Replace the stored Agency Swarm input history for a session."""
-        session.workflow_state[AGENCY_HISTORY_KEY] = list(history)
+        """Attach a durable campaign reference to a session."""
+        session.campaign_id = campaign_id
+        session.campaign_workspace_path = campaign_workspace_path
+        if canonical_memory_files is not None:
+            session.canonical_memory_files = list(canonical_memory_files)
+        if agent_memory_files is not None:
+            session.agent_memory_files = list(agent_memory_files)
+        session.linked_entity_ids["campaign_id"] = campaign_id
+        session.linked_entity_ids["campaign_workspace_path"] = campaign_workspace_path
+
+        snapshot = self.get_workflow_snapshot(session)
+        snapshot.data["campaign_id"] = campaign_id
+        snapshot.data["campaign_workspace_path"] = campaign_workspace_path
+        session.workflow_state[WORKFLOW_SNAPSHOT_KEY] = snapshot.to_dict()
+
         session.touch()
         return self._store.update(session)
 

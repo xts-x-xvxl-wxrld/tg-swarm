@@ -134,17 +134,19 @@ This supports staged product development without losing architectural discipline
 - role prompts
 - workflow-specific guidance
 
-### Orchestrator Owns Escalation And Approval Coordination
+### Orchestrator Owns Escalation And Review Coordination
 
 - determines when operator review is needed
 - frames the decision clearly
-- resumes work after approval input
+- resumes work after conversational operator input
+- manages campaign-level scheduling without letting scheduled work bypass approval boundaries
 
 ### App Runtime Owns Approval State Plumbing
 
-- stores pending approvals as structured state
-- reloads pending approval context on later turns
-- avoids deciding in code whether an operator reply is approval, clarification, or a changed instruction
+- should reserve hard approval state for irreversible or external write actions
+- should avoid blocking normal planning turns behind persisted approval checkpoints
+- should avoid blocking normal scheduled memory-maintenance or review work behind heavy approval gates
+- should avoid deciding in code whether an operator reply is approval, clarification, or a changed instruction
 
 ### Capability Layer Owns Execution Hooks
 
@@ -160,11 +162,13 @@ This supports staged product development without losing architectural discipline
 
 ## MVP Recommendation
 
-For MVP, approvals should likely be strongest around:
+For MVP, hard approvals should likely be strongest around:
 
-- community shortlist confirmation
-- first strategy/playbook approval
-- account assignment and join approval
+- joins into Telegram communities
+- sending messages or other external write actions
+- account-affecting actions that materially change health or pacing risk
+
+Planning artifacts, campaign-memory updates, recurring discovery refreshes, and strategy reviews should prefer conversational review checkpoints over runtime-enforced gates.
 
 Automatic high-volume engagement should remain out of scope.
 
@@ -180,7 +184,7 @@ This document does not yet define:
 ## Design Principles
 
 - Guardrails should be visible before they are fully automated.
-- Approvals should protect consequential actions, not suffocate normal workflows.
+- Hard approvals should protect consequential external actions, not suffocate normal workflows.
 - The app should prefer explicit pending decisions over hidden uncertainty.
 - Safety architecture should be layered rather than all-or-nothing.
 

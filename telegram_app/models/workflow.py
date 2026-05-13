@@ -28,6 +28,7 @@ class WorkflowArtifactKind(StrEnum):
     COMMUNITY_PROFILE = "community_profile"
     STRATEGY_PLAYBOOK = "strategy_playbook"
     ACCOUNT_ASSIGNMENT_PLAN = "account_assignment_plan"
+    EXECUTION_REPORT = "execution_report"
     RESEARCH_NOTE = "research_note"
 
 

@@ -33,7 +33,6 @@ Use `rg` to verify symbols and file locations before opening large modules.
 ```text
 server.py                         <- FastAPI + Telegram polling entrypoint
 shared_instructions.md            <- shared high-level context used across the repo
-config.py                         <- model configuration helpers
 
 telegram_app/
   app_service.py                  <- thin runtime coordinator
@@ -59,7 +58,6 @@ prompts/
   account_manager.md
   researcher.md
 
-shared_tools/                     <- reusable tool code and legacy shared integrations
 tools/                            <- framework-agnostic helper tools
 wiki/                             <- specs, plans, code index, and change log
 tests/                            <- focused runtime and integration tests
@@ -111,9 +109,7 @@ If you touch only docs or git metadata, a focused verification pass is enough.
 
 These areas may still contain OpenSwarm or Agency Swarm references:
 
-- old documentation
-- packaging metadata
-- legacy shared tools
-- inactive agent folders not used by the Telegram runtime
+- historical specs, plans, and changelog entries that document the migration
+- packaging or git metadata inherited from the original fork
 
 When cleaning those up, prefer small, explicit updates over broad renames.

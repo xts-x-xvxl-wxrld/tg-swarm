@@ -1,4 +1,4 @@
-"""File operation tools extracted from Agency Swarm BaseTool implementations."""
+"""Framework-agnostic file operation helpers."""
 
 from __future__ import annotations
 

@@ -13,6 +13,12 @@ class MessagingCapability(Protocol):
     def read_messages(self, chat_id: str, limit: int = 20) -> CapabilityResult:
         """Read recent messages from a chat."""
 
-    def send_message(self, chat_id: str, text: str) -> CapabilityResult:
-        """Send a message to a chat."""
-
+    def send_message(
+        self,
+        account_id: str,
+        chat_id: str,
+        text: str,
+        *,
+        approval_context: dict[str, object] | None = None,
+    ) -> CapabilityResult:
+        """Send a message to a chat from a specific Telegram account."""

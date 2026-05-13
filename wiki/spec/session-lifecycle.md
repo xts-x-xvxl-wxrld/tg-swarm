@@ -4,23 +4,37 @@
 
 Define how operator sessions begin, evolve, pause, resume, and complete in the Telegram-native app.
 
-This document focuses on continuity, state ownership, and approval handling across multi-turn work.
+This document focuses on continuity, state ownership, and approval handling across multi-turn work. It should be read alongside [Campaign Operations Model](C:/Users/ravil/OneDrive/Desktop/tg-swarm/wiki/spec/campaign-operations-model.md), which defines the longer-lived campaign object that sessions attach to.
 
 ## Design Goal
 
-The system should treat a session as the durable unit of operator work.
+The system should treat a session as the conversational unit of operator work, not the full durable campaign object.
 
 A session should let the app:
 
 - understand what the operator is trying to accomplish
 - remember what has already happened
 - track what is pending
-- preserve reusable outputs
+- attach the conversation to reusable campaign memory
 - continue work safely across multiple Telegram messages
 
 ## Session Definition
 
-A session is an operator-driven thread of work, initially started through `/new`, that captures intent, context, work state, approvals, and outputs until the work is complete or intentionally paused.
+A session is an operator-driven thread of work, initially started through `/new`, that captures intent, context, work state, approvals, and immediate conversational history while attaching the operator to a longer-lived campaign workspace.
+
+## Relationship To Campaigns
+
+Sessions are not the same thing as campaigns.
+
+A campaign is the durable operating workspace.
+
+A session is the conversational thread through which the operator interacts with that workspace.
+
+One session should typically attach to one active campaign at a time. A campaign may be revisited across multiple sessions over time.
+
+Scheduled and background campaign work may continue without any active session.
+
+Sessions are therefore an interaction layer over campaign operations, not the container that makes campaign work exist.
 
 ## Session Stages
 
@@ -37,6 +51,7 @@ At creation time, the system should initialize:
 - operator identifier
 - creation timestamp
 - empty working context
+- campaign linkage or campaign creation intent
 - initial status
 
 ### 2. Intent Capture
@@ -50,15 +65,16 @@ The system should capture:
 - target audience or campaign context when relevant
 - unresolved ambiguities
 
-The orchestrator should normalize this into a usable task frame.
+The orchestrator should normalize this into a usable task frame and either attach the session to an existing campaign or create a new campaign workspace when appropriate.
 
 ### 3. Active Work
 
 During active work, the orchestrator and specialists:
 
 - analyze the request
+- read and update campaign memory
 - produce intermediate findings
-- generate structured records
+- generate work items, memory updates, and structured records
 - identify approval points
 - update state as work progresses
 
@@ -70,9 +86,9 @@ Some actions or decisions should pause active work and await operator input.
 
 Examples:
 
-- approving a shortlist of communities
-- approving a strategy playbook
-- approving account assignment or join actions
+- approving joins into communities
+- approving outreach or posting actions
+- approving other sensitive or consequential external writes
 
 In this state, the session should preserve:
 
@@ -89,7 +105,7 @@ The resumed workflow should:
 - surface any pending approval context back to the orchestrator
 - let the orchestrator interpret whether the new message is an approval response, clarification, or changed request
 - update status
-- continue the appropriate workstream
+- continue the appropriate campaign workstream
 
 ### 6. Completed Or Archived
 
@@ -102,19 +118,20 @@ A session may eventually:
 
 Completed sessions should still remain queryable for historical context and data reuse.
 
+Campaigns may continue operating beyond any one session through scheduled work, later sessions, or orchestrator-managed review cycles.
+
 ## Session State Categories
 
 Each session should eventually be able to hold at least:
 
 - operator intent
-- current workflow stage
-- relevant campaign context
-- discovered communities
-- strategy outputs
-- account planning outputs
+- current conversational state
+- campaign identifier and campaign workspace linkage
+- relevant campaign context pointer
+- pending or recent work items visible to the operator
 - approvals requested and resolved
 - audit events
-- final summaries and artifacts
+- final summaries and references to durable campaign memory
 
 ## Session Ownership Principles
 
@@ -127,6 +144,7 @@ Each session should eventually be able to hold at least:
 
 - Important workflow data should be stored in structured form.
 - The system should not rely only on conversational recall.
+- Durable campaign truth should live in campaign memory rather than only inside session chat history.
 
 ### Pending Decisions Must Be Explicit
 
@@ -142,7 +160,7 @@ Expected interaction pattern:
 
 1. Operator starts with `/new`.
 2. Operator sends goal in natural language.
-3. App responds with questions, findings, summaries, or approvals.
+3. App attaches the session to a campaign and responds with questions, findings, summaries, work updates, or approvals.
 4. Operator continues the same work through follow-up messages.
 
 The session layer should make this feel coherent despite multi-agent internals.
@@ -154,9 +172,10 @@ The exact persistence model is still open, but session storage likely needs:
 
 - canonical session record
 - message history or normalized event history
-- current stage/status
+- current status
+- campaign linkage
 - pending approval record if present
-- links to structured workflow entities
+- links to campaign memory and relevant work items
 
 ## Failure And Recovery Considerations
 
@@ -164,8 +183,9 @@ The session model should eventually account for:
 
 - Telegram delivery retries or duplicate updates
 - tool failures during active work
-- partial completion of a multi-step workflow
+- partial completion of a delegated work item or scheduled task
 - operator silence during approval waits
+- campaigns that continue to accumulate memory across many sessions
 
 Recovery behavior is not yet fully designed, but the session layer should make it possible.
 
@@ -173,7 +193,7 @@ Recovery behavior is not yet fully designed, but the session layer should make i
 
 Sessions are not the same thing as campaigns or communities.
 
-A session is the operator work container.
+A session is the operator-facing work thread, not the full durable work container.
 
 It may create, update, or reference:
 
@@ -191,6 +211,7 @@ This distinction should stay clear in the implementation.
 For MVP, the lifecycle should optimize for:
 
 - straightforward session start
+- clean campaign attachment
 - clear active versus pending-approval state
 - resumable work
 - enough persistence to avoid losing reasoning context
@@ -203,8 +224,8 @@ This lifecycle is successful when:
 
 1. An operator can start and continue work through Telegram without repeating context constantly.
 2. The system can pause for approvals and resume cleanly.
-3. Important outputs persist outside raw chat text.
-4. The orchestrator can maintain continuity over multi-turn workflows.
+3. Important outputs persist outside raw chat text in a durable campaign workspace.
+4. The orchestrator can maintain continuity over multi-turn workflows and across multiple sessions attached to the same campaign.
 
 ## Open Questions
 

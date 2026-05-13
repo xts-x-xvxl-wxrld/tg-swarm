@@ -25,6 +25,9 @@ class SessionStore(Protocol):
     def get_active_for_operator(self, operator_id: str) -> SessionRecord | None:
         """Return the latest active session for an operator."""
 
+    def list_for_campaign(self, campaign_id: str) -> list[SessionRecord]:
+        """Return all sessions attached to a campaign."""
+
 
 class InMemorySessionStore:
     """Simple in-memory store for early control-path development."""
@@ -52,12 +55,16 @@ class InMemorySessionStore:
             return None
         return self._sessions.get(session_id)
 
+    def list_for_campaign(self, campaign_id: str) -> list[SessionRecord]:
+        return [session for session in self._sessions.values() if session.campaign_id == campaign_id]
+
 
 class JsonSessionStore:
     """File-backed session store that preserves runtime state across restarts."""
 
     def __init__(self, file_path: str | Path) -> None:
         self._file_path = Path(file_path)
+        self._sessions_dir = self._file_path.parent / "sessions"
         self._lock = RLock()
         self._sessions: dict[str, SessionRecord] = {}
         self._active_session_ids: dict[str, str] = {}
@@ -88,34 +95,57 @@ class JsonSessionStore:
                 return None
             return self._sessions.get(session_id)
 
+    def list_for_campaign(self, campaign_id: str) -> list[SessionRecord]:
+        with self._lock:
+            return [session for session in self._sessions.values() if session.campaign_id == campaign_id]
+
     def _load(self) -> None:
         payload = load_json_file(
             self._file_path,
-            default={"sessions": {}, "active_session_ids": {}},
+            default={"active_session_ids": {}},
         )
         raw_sessions = payload.get("sessions", {})
         raw_active_session_ids = payload.get("active_session_ids", {})
-        if not isinstance(raw_sessions, dict):
-            raw_sessions = {}
         if not isinstance(raw_active_session_ids, dict):
             raw_active_session_ids = {}
 
-        self._sessions = {
-            session_id: SessionRecord.from_dict(session_payload)
-            for session_id, session_payload in raw_sessions.items()
-            if isinstance(session_payload, dict)
-        }
+        migrated_legacy_sessions = isinstance(raw_sessions, dict) and bool(raw_sessions)
+        if migrated_legacy_sessions:
+            self._migrate_legacy_sessions(raw_sessions)
+
+        self._sessions = self._load_session_files()
         self._active_session_ids = {
             operator_id: str(session_id)
             for operator_id, session_id in raw_active_session_ids.items()
         }
+        if migrated_legacy_sessions:
+            self._persist()
 
     def _persist(self) -> None:
-        payload = {
-            "sessions": {
-                session_id: session.to_dict()
-                for session_id, session in self._sessions.items()
-            },
-            "active_session_ids": dict(self._active_session_ids),
-        }
+        self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        for session_id, session in self._sessions.items():
+            write_json_file(self._sessions_dir / f"{session_id}.json", session.to_dict())
+
+        payload = {"active_session_ids": dict(self._active_session_ids)}
         write_json_file(self._file_path, payload)
+
+    def _load_session_files(self) -> dict[str, SessionRecord]:
+        if not self._sessions_dir.exists():
+            return {}
+
+        sessions: dict[str, SessionRecord] = {}
+        for session_path in self._sessions_dir.glob("*.json"):
+            session_payload = load_json_file(session_path, default={})
+            if not isinstance(session_payload, dict):
+                continue
+            session = SessionRecord.from_dict(session_payload)
+            if session.session_id:
+                sessions[session.session_id] = session
+        return sessions
+
+    def _migrate_legacy_sessions(self, raw_sessions: dict[str, object]) -> None:
+        self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        for session_id, session_payload in raw_sessions.items():
+            if not isinstance(session_payload, dict):
+                continue
+            write_json_file(self._sessions_dir / f"{session_id}.json", session_payload)

@@ -6,10 +6,12 @@ import json
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import anthropic
 
 from telegram_app.approvals import ApprovalManager
+from telegram_app.campaign_memory import CampaignMemoryManager
 from telegram_app.capabilities import AccountCapability
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import (
@@ -18,6 +20,7 @@ from telegram_app.models import (
     WorkflowArtifact,
     WorkflowArtifactKind,
 )
+from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.sessions import SessionManager
 from telegram_app.workflow_validation import parse_marked_json_block, validate_account_assignment_plan
 
@@ -50,11 +53,15 @@ PROMPT_SAFE_SHORTLIST_KEYS = (
     "promo_tolerance",
     "moderation_risk",
     "reason",
+    "verification_state",
     "source_notes",
     "member_count",
     "verified",
     "restricted",
     "scam",
+    "search_mode",
+    "match_kind",
+    "evidence_summary",
     "recent_activity_summary",
     "recent_tone_summary",
 )
@@ -117,6 +124,7 @@ class AccountManagerAgent:
         self._approval_manager = approval_manager
         self._account_capability = account_capability
         self._monitor = monitor or NullRuntimeEventLogger()
+        self._memory_manager = CampaignMemoryManager()
         self._client = anthropic.Anthropic()
 
     def run(
@@ -151,7 +159,17 @@ class AccountManagerAgent:
         system = [
             {"type": "text", "text": _load_prompt("account_manager.md")},
             {"type": "text", "text": _load_prompt("shared_runtime.md")},
+            {"type": "text", "text": build_runtime_context(session, pending_approval=None)},
         ]
+        specialist_memory = self._memory_manager.load_agent_prompt_memory(session, "account_manager")
+        if specialist_memory:
+            system.append(
+                {
+                    "type": "text",
+                    "text": "Account manager working memory:\n"
+                    + json.dumps(specialist_memory, ensure_ascii=True, sort_keys=True),
+                }
+            )
         messages = [{"role": "user", "content": user_content}]
 
         model = _resolve_model()
@@ -216,19 +234,17 @@ class AccountManagerAgent:
                     summary=plan_summary,
                     data=plan_data,
                 )
-
-            if self._approval_manager is not None and artifact is not None:
-                assignments = plan_data.get("assignments", [])
-                approval = self._approval_manager.create_pending(
-                    session_id=session.session_id,
-                    category=APPROVAL_CATEGORY,
-                    prompt="Approve this account assignment plan to begin execution, or tell me what to change.",
-                    context={
-                        "artifact_id": artifact.artifact_id,
-                        "community_count": len(assignments),
-                    },
-                )
-                self._session_manager.mark_pending_approval(session, approval.approval_id)
+        else:
+            plan_summary = str(plan_data.get("plan_summary", "Account assignment plan ready."))
+            artifact = WorkflowArtifact(
+                artifact_id=str(uuid4()),
+                kind=WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN,
+                title="Account assignment plan",
+                summary=plan_summary,
+                data=plan_data,
+            )
+        if artifact is not None:
+            self._write_working_memory(session, artifact, operator_message)
 
         self._monitor.record_event(
             component="account_manager_agent",
@@ -246,6 +262,53 @@ class AccountManagerAgent:
             },
         )
         return operator_text, artifact, approval
+
+    def _write_working_memory(
+        self,
+        session: SessionRecord,
+        artifact: WorkflowArtifact,
+        operator_message: str,
+    ) -> None:
+        summary = str(artifact.data.get("plan_summary", "")).strip() or artifact.summary
+        assignments = artifact.data.get("assignments", [])
+        lines = ["# Account Manager Notes", ""]
+        if summary:
+            lines.extend(["## Current Plan", "", summary])
+        if operator_message.strip():
+            lines.extend(["", "## Latest Operator Context", "", operator_message.strip()])
+        if isinstance(assignments, list) and assignments:
+            lines.extend(["", "## Assignment Focus", ""])
+            for assignment in assignments[:5]:
+                if not isinstance(assignment, dict):
+                    continue
+                community_name = str(
+                    assignment.get("community_name")
+                    or assignment.get("community_handle")
+                    or "Community"
+                ).strip()
+                assigned_account = str(assignment.get("assigned_account", "")).strip()
+                risk_level = str(assignment.get("risk_level", "")).strip()
+                scheduled_posts = assignment.get("scheduled_posts", [])
+                post_count = len(scheduled_posts) if isinstance(scheduled_posts, list) else 0
+                details = " | ".join(
+                    value
+                    for value in [
+                        f"account={assigned_account}" if assigned_account else "",
+                        f"risk={risk_level}" if risk_level else "",
+                        f"posts={post_count}" if post_count else "",
+                    ]
+                    if value
+                )
+                lines.append(f"- {community_name}: {details or 'Assignment captured in the latest plan.'}")
+        lines.extend(
+            [
+                "",
+                "## Next Account-Planning Move",
+                "",
+                "Revise this note when pacing, roster availability, or assignment risk changes after operator feedback.",
+            ]
+        )
+        self._memory_manager.write_agent_working_memory(session, "account_manager", "\n".join(lines))
 
     def _build_account_context(self) -> list[str]:
         if self._account_capability is None:
@@ -274,7 +337,7 @@ class AccountManagerAgent:
         summary = operator_text.strip() or "I generated an account-planning draft, but I could not trust its structured output."
         return (
             f"{summary}\n\n"
-            "I did not save or request approval for this plan because its machine-readable payload was incomplete. "
+            "I did not save this plan because its machine-readable payload was incomplete. "
             f"{validation_error} Please ask me to retry account planning."
         )
 
@@ -301,6 +364,9 @@ def _prompt_safe_artifact_data(kind: WorkflowArtifactKind, data: dict) -> dict:
         compact_payload = {
             "summary": data.get("summary"),
             "recommended_next_step": data.get("recommended_next_step"),
+            "verification_summary": data.get("verification_summary"),
+            "coverage_summary": data.get("coverage_summary"),
+            "verification_counts": data.get("verification_counts"),
             "communities": compact_communities,
         }
         return {

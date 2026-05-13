@@ -10,9 +10,8 @@ from telegram_app.capabilities.base import CapabilityResult
 class CommunityCapability(Protocol):
     """Operations for discovering and profiling Telegram communities."""
 
-    def search(self, query: str) -> CapabilityResult:
+    def search(self, query: str, *, mode: str = "exact", limit: int = 10) -> CapabilityResult:
         """Search for communities matching a query."""
 
     def get_profile(self, community_id: str) -> CapabilityResult:
         """Return profile details for a community."""
-

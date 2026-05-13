@@ -6,6 +6,8 @@ Define the reusable Telegram execution surface that specialist agents and the or
 
 This document exists to prevent Telegram implementation details from leaking into every agent prompt or tool bundle.
 
+It should be read alongside [Campaign Operations Model](C:/Users/ravil/OneDrive/Desktop/tg-swarm/wiki/spec/campaign-operations-model.md), because capabilities are used not only in one-shot workflows but also in campaign-attached work items and recurring scheduled operations.
+
 ## Design Goal
 
 The Telegram capability layer should be the stable interface between agent reasoning and Telegram operations.
@@ -15,6 +17,7 @@ It should:
 - expose Telegram actions in role-agnostic form
 - normalize account and community operations
 - support both read and write workflows
+- support both operator-driven and schedule-driven campaign work
 - preserve auditability and safety hooks
 - remain reusable across workflows beyond marketing
 
@@ -27,6 +30,8 @@ This layer sits between:
 
 Agents should think in terms of capabilities, not raw Telegram client details.
 
+Work-item execution should think in terms of capabilities too, regardless of whether the work was triggered by an operator message or by a recurring campaign schedule.
+
 ## Core Principle
 
 Telegram capabilities should be broad enough to support flexible agent behavior, but structured enough to remain observable and governable.
@@ -34,6 +39,8 @@ Telegram capabilities should be broad enough to support flexible agent behavior,
 ## Capability Families
 
 ### 1. Session and Account Capabilities
+
+For the narrower account-focused execution surface, see [Account Capability](C:/Users/ravil/OneDrive/Desktop/tg-swarm/wiki/spec/account-capability.md).
 
 Examples:
 
@@ -138,16 +145,18 @@ The exact code interface is still open, but the abstraction should be narrow and
 
 - Read operations should be easy to reuse in analysis workflows.
 - Write operations should be more observable and approval-friendly.
+- Scheduled work should be able to use read operations broadly without inheriting automatic permission to perform risky writes.
 
 ### Prefer Structured Outputs
 
 - Capabilities should return structured records whenever possible.
 - Agent prompts should not need to parse raw Telegram client output heavily.
+- Capability outputs should be usable by campaign memory writers, work-item handlers, and future review logic.
 
 ### Keep Roles Out Of The Capability API
 
 - Capabilities should not be named for specific agents.
-- They should represent Telegram domain actions that any workflow can reuse.
+- They should represent Telegram domain actions that any workflow or scheduled campaign task can reuse.
 
 ### Preserve Swapability
 
@@ -172,6 +181,7 @@ The capability layer should not own policy decisions outright, but it should exp
 - action classification
 - risk annotations
 - audit logging
+- execution-request shaping when direct writes should route back through orchestrator approval
 
 This enables later policy enforcement without rewriting every agent.
 
@@ -184,6 +194,12 @@ The capability layer should let role agents remain relatively broad:
 - Account Manager can inspect account state and plan assignments
 
 The agents should use the same capability substrate instead of each carrying bespoke Telegram tools.
+
+The same substrate should also support:
+
+- orchestrator-level review work
+- schedule-triggered community refresh work
+- later execution request flows
 
 ## Minimal MVP Surface
 
@@ -198,6 +214,11 @@ The MVP likely needs at least:
 - structured action logging
 
 Write messaging may exist later or stay gated depending on rollout risk.
+
+The MVP should also preserve the distinction between:
+
+- read capabilities that support broad analysis and recurring campaign maintenance
+- write capabilities that may require approval-aware routing
 
 ## Non-Goals
 
@@ -214,8 +235,9 @@ This layer is successful when:
 
 1. Agents can perform Telegram-relevant work without knowing backend mechanics.
 2. Read workflows and write workflows are clearly distinguishable.
-3. Telegram tooling can evolve without breaking role definitions.
-4. State and audit information can be captured consistently.
+3. Operator-driven work and schedule-driven work can use the same stable execution surface.
+4. Telegram tooling can evolve without breaking role definitions.
+5. State and audit information can be captured consistently.
 
 ## Open Questions
 

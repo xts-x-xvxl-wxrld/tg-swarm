@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from telegram_app.models import WorkItemPriority
+
 
 def parse_marked_json_block(output: str, marker: str) -> dict[str, Any] | None:
     """Return the JSON object that follows a marker, with one repair pass."""
@@ -77,6 +79,24 @@ def validate_account_assignment_plan(payload: dict[str, Any] | None) -> str | No
     return None
 
 
+def validate_schedule_action(payload: dict[str, Any] | None) -> str | None:
+    """Return an error message when a schedule action payload is invalid."""
+    if not isinstance(payload, dict):
+        return "The schedule response did not include a valid JSON action."
+
+    action = str(payload.get("action", "")).strip().lower()
+    if action not in {"create", "pause", "resume"}:
+        return "The schedule action must be one of `create`, `pause`, or `resume`."
+
+    schedule = payload.get("schedule")
+    if not isinstance(schedule, dict):
+        return "The schedule action must include a `schedule` object."
+
+    if action == "create":
+        return _validate_schedule_create(schedule)
+    return _validate_schedule_state_change(schedule)
+
+
 def _candidate_variants(candidate: str) -> list[str]:
     variants = [candidate]
     start_index = candidate.find("{")
@@ -101,3 +121,50 @@ def _strip_code_fence(candidate: str) -> str:
 
 def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_schedule_create(schedule: dict[str, Any]) -> str | None:
+    owner_role = str(schedule.get("owner_role", "")).strip()
+    work_type = str(schedule.get("work_type", "")).strip()
+    goal = str(schedule.get("goal", "")).strip()
+    interval_minutes = schedule.get("interval_minutes")
+    priority = str(schedule.get("priority", "")).strip().lower()
+
+    allowed_pairs = {
+        "discovery": "discovery",
+        "strategy": "strategy",
+        "account_planning": "account_manager",
+    }
+    if work_type not in allowed_pairs:
+        return "The schedule `work_type` must be `discovery`, `strategy`, or `account_planning`."
+    if owner_role != allowed_pairs[work_type]:
+        return f"The schedule `owner_role` must be `{allowed_pairs[work_type]}` for `{work_type}` work."
+    if not goal:
+        return "The schedule is missing `goal`."
+    if not isinstance(interval_minutes, int) or interval_minutes <= 0:
+        return "The schedule must include a positive integer `interval_minutes`."
+    if priority and priority not in {member.value for member in WorkItemPriority}:
+        return "The schedule `priority` must be `low`, `medium`, or `high` when it is provided."
+
+    minimum_value = schedule.get("minimum_value")
+    if minimum_value is not None and not isinstance(minimum_value, int):
+        return "The schedule `minimum_value` must be an integer when it is provided."
+
+    pause_after = schedule.get("pause_after_consecutive_misses")
+    if pause_after is not None and (not isinstance(pause_after, int) or pause_after <= 0):
+        return "The schedule `pause_after_consecutive_misses` must be a positive integer when it is provided."
+
+    constraints = schedule.get("constraints")
+    if constraints is not None and not isinstance(constraints, list):
+        return "The schedule `constraints` must be a list of strings when it is provided."
+    return None
+
+
+def _validate_schedule_state_change(schedule: dict[str, Any]) -> str | None:
+    schedule_id = str(schedule.get("schedule_id", "")).strip()
+    work_type = str(schedule.get("work_type", "")).strip()
+    if not schedule_id and not work_type:
+        return "The schedule action must include either `schedule_id` or `work_type`."
+    if work_type and work_type not in {"discovery", "strategy", "account_planning"}:
+        return "The schedule `work_type` must be `discovery`, `strategy`, or `account_planning` when it is provided."
+    return None

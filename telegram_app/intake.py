@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from telegram_app.models import (
@@ -52,6 +53,21 @@ class StructuredIntakeCoordinator:
     ) -> None:
         """Update structured intake state before the orchestrator processes the turn."""
         if pending_approval is not None:
+            return
+
+        current_snapshot = get_workflow_snapshot(session)
+        if current_snapshot.stage in {
+            WorkflowStage.STRATEGY,
+            WorkflowStage.ACCOUNT_PLANNING,
+            WorkflowStage.COMPLETE,
+        }:
+            return
+
+        if (
+            current_snapshot.stage is WorkflowStage.DISCOVERY
+            and self._session_manager.get_latest_artifact_of_kind(session, WorkflowArtifactKind.COMMUNITY_SHORTLIST)
+            is not None
+        ):
             return
 
         normalized_message = message.strip()
@@ -135,11 +151,13 @@ def _merge_campaign_brief_data(existing_data: dict[str, Any], message: str) -> d
         }
     )
 
-    field_updates = _extract_field_updates(message)
+    field_updates, explicit_fields = _extract_field_updates(message)
     for key, value in field_updates.items():
         if key in (CONSTRAINTS_KEY, SUCCESS_CRITERIA_KEY, NOTES_KEY, SOURCE_MESSAGES_KEY):
             brief_data[key] = _merge_unique_strings(brief_data.get(key, []), value)
-        elif value:
+        elif key in explicit_fields and value:
+            brief_data[key] = value
+        elif value and not brief_data.get(key):
             brief_data[key] = value
 
     if not field_updates.get(OBJECTIVE_KEY):
@@ -155,15 +173,17 @@ def _merge_campaign_brief_data(existing_data: dict[str, Any], message: str) -> d
     return brief_data
 
 
-def _extract_field_updates(message: str) -> dict[str, Any]:
+def _extract_field_updates(message: str) -> tuple[dict[str, Any], set[str]]:
     updates: dict[str, Any] = {}
-    remaining_lines = []
+    explicit_fields: set[str] = set()
+    remaining_segments: list[str] = []
     labeled_lines = _extract_labeled_lines(message)
 
     for field_name, aliases in LABELED_FIELD_ALIASES.items():
         extracted_value = _extract_labeled_value(labeled_lines, aliases)
         if not extracted_value:
             continue
+        explicit_fields.add(field_name)
 
         if field_name in (CONSTRAINTS_KEY, SUCCESS_CRITERIA_KEY):
             updates[field_name] = _split_list_items(extracted_value)
@@ -186,26 +206,28 @@ def _extract_field_updates(message: str) -> dict[str, Any]:
             if inferred_geography:
                 updates[GEOGRAPHY_KEY] = inferred_geography
 
-    remaining_lines.extend(
-        line
-        for line in message.splitlines()
-        if not _is_labeled_line(line)
-    )
-    extra_note = _normalize_text(" ".join(remaining_lines))
+    if explicit_fields:
+        remaining_segments.extend(_extract_unlabeled_segments(message))
+    else:
+        remaining_segments.extend(
+            line
+            for line in message.splitlines()
+            if not _is_labeled_line(line)
+        )
+    extra_note = _normalize_text(" ".join(remaining_segments))
     if extra_note and extra_note != updates.get(OBJECTIVE_KEY):
         updates[NOTES_KEY] = [extra_note]
 
-    return updates
+    return updates, explicit_fields
 
 
 def _extract_labeled_lines(message: str) -> dict[str, str]:
     labeled_lines: dict[str, str] = {}
-    for raw_line in message.splitlines():
-        line = raw_line.strip()
-        if ":" not in line:
-            continue
-        label, _, value = line.partition(":")
-        labeled_lines[label.strip().lower()] = _normalize_text(value)
+    for match in _labeled_field_pattern().finditer(message):
+        label = match.group("label").strip().lower()
+        value = _normalize_text(match.group("value"))
+        if value:
+            labeled_lines[label] = value
     return labeled_lines
 
 
@@ -300,6 +322,37 @@ def _normalize_text(value: str) -> str:
         if cleaned.endswith(stopword):
             cleaned = cleaned[: -len(stopword)].strip()
     return cleaned
+
+
+def _extract_unlabeled_segments(message: str) -> list[str]:
+    segments: list[str] = []
+    last_end = 0
+    for match in _labeled_field_pattern().finditer(message):
+        leading = _normalize_text(message[last_end:match.start()])
+        if leading:
+            segments.append(leading)
+        last_end = match.end()
+
+    trailing = _normalize_text(message[last_end:])
+    if trailing:
+        segments.append(trailing)
+    return segments
+
+
+def _labeled_field_pattern() -> re.Pattern[str]:
+    aliases = sorted(
+        {
+            alias
+            for alias_group in LABELED_FIELD_ALIASES.values()
+            for alias in alias_group
+        },
+        key=len,
+        reverse=True,
+    )
+    alias_pattern = "|".join(re.escape(alias) for alias in aliases)
+    return re.compile(
+        rf"(?is)(?P<label>{alias_pattern})\s*:\s*(?P<value>.*?)(?=(?:\s+(?:{alias_pattern})\s*:)|$)"
+    )
 
 
 def _extract_phrase_after_keyword(

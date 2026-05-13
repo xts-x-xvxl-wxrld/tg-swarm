@@ -6,12 +6,16 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import anthropic
 
+from telegram_app.campaign_memory import CampaignMemoryManager
 from telegram_app.capabilities import CommunityCapability
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import SessionRecord, WorkflowArtifact, WorkflowArtifactKind
+from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.sessions import SessionManager
 from telegram_app.workflow_validation import parse_marked_json_block, validate_strategy_playbook
 
@@ -43,11 +47,15 @@ PROMPT_SAFE_SHORTLIST_KEYS = (
     "promo_tolerance",
     "moderation_risk",
     "reason",
+    "verification_state",
     "source_notes",
     "member_count",
     "verified",
     "restricted",
     "scam",
+    "search_mode",
+    "match_kind",
+    "evidence_summary",
     "recent_activity_summary",
     "recent_tone_summary",
 )
@@ -64,6 +72,49 @@ PROMPT_SAFE_PROFILE_KEYS = (
     "linked_chat_id",
     "slowmode_seconds",
 )
+
+
+def _build_profile_snapshot_from_shortlist(community: dict[str, Any]) -> dict[str, object] | None:
+    live_profile = community.get("live_profile", {})
+    if not isinstance(live_profile, dict):
+        return None
+
+    snapshot = {
+        key: live_profile.get(key)
+        for key in PROMPT_SAFE_PROFILE_KEYS
+        if live_profile.get(key) not in ("", [], {}, None)
+    }
+    if not snapshot:
+        return None
+    return {
+        "community_id": str(
+            community.get("handle")
+            or community.get("community_id")
+            or live_profile.get("community_id")
+            or community.get("name")
+            or ""
+        ).strip(),
+        "data": snapshot,
+        "source": "persisted_discovery_profile",
+    }
+
+
+def _build_live_profile_lookup_id(community: dict[str, Any]) -> str:
+    live_search_match = community.get("live_search_match", {})
+    if isinstance(live_search_match, dict):
+        username = str(live_search_match.get("username", "")).strip()
+        if username:
+            return f"@{username}"
+
+    handle = str(community.get("handle", "")).strip()
+    if handle:
+        return handle
+
+    community_id = str(community.get("community_id", "")).strip()
+    if community_id:
+        return community_id
+
+    return str(community.get("name", "")).strip()
 
 
 def _load_prompt(name: str) -> str:
@@ -102,6 +153,7 @@ class StrategyAgent:
         self._session_manager = session_manager
         self._community_capability = community_capability
         self._monitor = monitor or NullRuntimeEventLogger()
+        self._memory_manager = CampaignMemoryManager()
         self._client = anthropic.Anthropic()
 
     def run(
@@ -135,7 +187,17 @@ class StrategyAgent:
         system = [
             {"type": "text", "text": _load_prompt("strategy.md")},
             {"type": "text", "text": _load_prompt("shared_runtime.md")},
+            {"type": "text", "text": build_runtime_context(session, pending_approval=None)},
         ]
+        specialist_memory = self._memory_manager.load_agent_prompt_memory(session, "strategy")
+        if specialist_memory:
+            system.append(
+                {
+                    "type": "text",
+                    "text": "Strategy specialist working memory:\n"
+                    + json.dumps(specialist_memory, ensure_ascii=True, sort_keys=True),
+                }
+            )
         messages = [{"role": "user", "content": user_content}]
 
         model = _resolve_model()
@@ -198,6 +260,17 @@ class StrategyAgent:
                     summary=playbook_summary,
                     data=playbook_data,
                 )
+        else:
+            playbook_summary = str(playbook_data.get("campaign_strategy_summary", "Strategy playbook ready."))
+            artifact = WorkflowArtifact(
+                artifact_id=str(uuid4()),
+                kind=WorkflowArtifactKind.STRATEGY_PLAYBOOK,
+                title="Strategy playbook",
+                summary=playbook_summary,
+                data=playbook_data,
+            )
+        if artifact is not None:
+            self._write_working_memory(session, artifact, operator_message)
 
         self._monitor.record_event(
             component="strategy_agent",
@@ -213,6 +286,40 @@ class StrategyAgent:
             },
         )
         return operator_text, artifact
+
+    def _write_working_memory(
+        self,
+        session: SessionRecord,
+        artifact: WorkflowArtifact,
+        operator_message: str,
+    ) -> None:
+        summary = str(artifact.data.get("campaign_strategy_summary", "")).strip() or artifact.summary
+        communities = artifact.data.get("communities", [])
+        lines = ["# Strategy Notes", ""]
+        if summary:
+            lines.extend(["## Current Direction", "", summary])
+        if operator_message.strip():
+            lines.extend(["", "## Latest Operator Context", "", operator_message.strip()])
+        if isinstance(communities, list) and communities:
+            lines.extend(["", "## Community Tactics", ""])
+            for community in communities[:5]:
+                if not isinstance(community, dict):
+                    continue
+                name = str(community.get("name") or community.get("handle") or "Community").strip()
+                angle = str(community.get("messaging_angle", "")).strip()
+                timing = str(community.get("timing", "")).strip()
+                risk_notes = str(community.get("risk_notes", "")).strip()
+                details = " | ".join(value for value in [angle, timing, risk_notes] if value)
+                lines.append(f"- {name}: {details or 'Tactic captured in the latest playbook.'}")
+        lines.extend(
+            [
+                "",
+                "## Next Strategy Move",
+                "",
+                "Revise this note when operator feedback changes positioning, sequencing, or community-specific guidance.",
+            ]
+        )
+        self._memory_manager.write_agent_working_memory(session, "strategy", "\n".join(lines))
 
     def _build_capability_context(self, session: SessionRecord) -> list[str]:
         if self._session_manager is None or self._community_capability is None:
@@ -231,20 +338,25 @@ class StrategyAgent:
             if not isinstance(community, dict):
                 continue
 
-            community_id = str(community.get("handle") or community.get("name") or "").strip()
-            if not community_id:
-                continue
+            persisted_snapshot = _build_profile_snapshot_from_shortlist(community)
+            if persisted_snapshot is not None:
+                profile_snapshots.append(persisted_snapshot)
+            else:
+                community_id = _build_live_profile_lookup_id(community)
+                if not community_id:
+                    continue
 
-            profile_result = self._community_capability.get_profile(community_id)
-            if not profile_result.success:
-                continue
+                profile_result = self._community_capability.get_profile(community_id)
+                if not profile_result.success:
+                    continue
 
-            profile_snapshots.append(
-                {
-                    "community_id": community_id,
-                    "data": _prompt_safe_profile_data(profile_result.data),
-                }
-            )
+                profile_snapshots.append(
+                    {
+                        "community_id": community_id,
+                        "data": _prompt_safe_profile_data(profile_result.data),
+                        "source": "live_profile_read",
+                    }
+                )
             if len(profile_snapshots) >= 5:
                 break
 
@@ -296,6 +408,9 @@ def _prompt_safe_artifact_data(kind: WorkflowArtifactKind, data: dict) -> dict:
         compact_payload = {
             "summary": data.get("summary"),
             "recommended_next_step": data.get("recommended_next_step"),
+            "verification_summary": data.get("verification_summary"),
+            "coverage_summary": data.get("coverage_summary"),
+            "verification_counts": data.get("verification_counts"),
             "communities": compact_communities,
         }
         return {
