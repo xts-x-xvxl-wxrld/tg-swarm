@@ -13,7 +13,7 @@ class AccountCapabilityImpl:
         self._registry = registry
 
     def list_accounts(self) -> CapabilityResult:
-        accounts = [account.to_dict() for account in self._registry.list_accounts()]
+        accounts = [self._serialize_account(account.account_id, account.to_dict()) for account in self._registry.list_accounts()]
         return CapabilityResult(
             success=True,
             data={"accounts": accounts, "source": "mtproto_registry"},
@@ -32,6 +32,13 @@ class AccountCapabilityImpl:
 
         return CapabilityResult(
             success=True,
-            data={"account": account.to_dict(), "source": "mtproto_registry"},
+            data={"account": self._serialize_account(account.account_id, account.to_dict()), "source": "mtproto_registry"},
             audit={"implementation": "mtproto_account_capability", "registry_path": str(self._registry.path)},
         )
+
+    def _serialize_account(self, account_id: str, payload: dict[str, object]) -> dict[str, object]:
+        enriched = dict(payload)
+        warmup = self._registry.describe_warmup(account_id)
+        if warmup:
+            enriched.update(warmup)
+        return enriched

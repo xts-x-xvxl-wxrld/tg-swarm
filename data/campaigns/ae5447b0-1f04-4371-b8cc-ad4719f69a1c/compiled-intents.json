@@ -1,0 +1,265 @@
+{
+  "compiled_intents": [
+    {
+      "accepted_at": "2026-06-01T08:18:46.375351+00:00",
+      "ambiguity": "",
+      "application_result": "Updated the live reply voice for campaign `ae5447b0-1f04-4371-b8cc-ad4719f69a1c`: avoid hard close language.",
+      "applied_at": "2026-06-01T08:18:46.615933+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 1.0,
+      "created_at": "2026-06-01T08:18:46.371241+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49",
+        "artifact:56da3bb8-ebc4-4009-8a6c-fb813d85c64d"
+      ],
+      "intent_id": "d2d5a8c1-b75d-447e-a61c-ee53b48bb480",
+      "kind": "campaign_control.update_voice",
+      "payload": {
+        "operator_id": "519192084",
+        "raw_text": "Goal: Build a cautious Telegram campaign for BriefBridge, an AI-assisted lead intake workspace for small service agencies. It pulls website forms, shared inbox leads, and Telegram inquiries into one queue and suggests follow-up drafts for human review. We want agency founders and operators with messy inbound lead flow, not ecommerce support teams. Keep the tone practical, low-hype, and emoji-free. In groups, stay value-first and avoid hard selling. Use our private test groups for discovery, strategy, and account planning. The main conversion target is a 20-minute workflow audit call.",
+        "scope": "campaign",
+        "style_avoid": [
+          "hard close language"
+        ],
+        "style_do": [
+          "frame value around the online service naturally"
+        ]
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "state_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Update the campaign live-reply voice guidance.",
+      "updated_at": "2026-06-01T08:18:46.615949+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T08:23:20.163559+00:00",
+      "ambiguity": "",
+      "application_result": "Updated the live reply voice for campaign `ae5447b0-1f04-4371-b8cc-ad4719f69a1c`: direct.",
+      "applied_at": "2026-06-01T08:23:20.350958+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 1.0,
+      "created_at": "2026-06-01T08:23:20.159909+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49",
+        "artifact:56da3bb8-ebc4-4009-8a6c-fb813d85c64d"
+      ],
+      "intent_id": "01d85e25-5894-48df-b507-30b6fe870315",
+      "kind": "campaign_control.update_voice",
+      "payload": {
+        "operator_id": "519192084",
+        "raw_text": "okay, we will only operate in out test groups. https://t.me/swarmtest3 https://t.me/swarmtest2 https://t.me/swarmtestgroup. We want to make group outreach gradually but still proactively, we want to initiate conversations, alsthough do it with caution. Use direct CTA's and convert to your own dms",
+        "scope": "campaign",
+        "style_do": [
+          "answer more directly"
+        ],
+        "tone_descriptors": [
+          "direct"
+        ]
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "state_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Update the campaign live-reply voice guidance.",
+      "updated_at": "2026-06-01T08:23:20.350974+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T08:40:43.785721+00:00",
+      "ambiguity": "",
+      "application_result": "DM replies are now `automatic` for campaign `ae5447b0-1f04-4371-b8cc-ad4719f69a1c`.",
+      "applied_at": "2026-06-01T08:40:43.994314+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 1.0,
+      "created_at": "2026-06-01T08:40:43.781478+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49",
+        "artifact:56da3bb8-ebc4-4009-8a6c-fb813d85c64d"
+      ],
+      "intent_id": "6889671f-04f0-461f-b34d-01179dffd31e",
+      "kind": "campaign_control.set_posture",
+      "payload": {
+        "operator_id": "519192084",
+        "posture_field": "dm_reply_mode",
+        "raw_text": "let's change the cta from calls to like transfering them into managed accounts dm's",
+        "requested_mode": "autonomous_allowed",
+        "scope": "campaign"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "state_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Set `dm_reply_mode` to `autonomous_allowed`.",
+      "updated_at": "2026-06-01T08:40:43.994331+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T08:58:48.524284+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210726`.",
+      "applied_at": "2026-06-01T08:58:48.605230+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 0.95,
+      "created_at": "2026-06-01T08:58:48.515210+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49"
+      ],
+      "intent_id": "73aec000-5bb8-4520-b507-45e06ef7728b",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210726",
+        "action_type": "send_group_message",
+        "chat_id": "3735632929",
+        "operator_id": "519192084",
+        "text": "Agencies tend to lose the most leads not at acquisition but at the handoff \u2014 between the form, the inbox, and whoever's meant to follow up. Anyone dealing with that? Drop a reply or message me directly."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Day 1 opening message to swarmtestgroup \u2014 soft proof angle with DM CTA.",
+      "updated_at": "2026-06-01T08:58:48.605250+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T08:58:48.678908+00:00",
+      "ambiguity": "",
+      "application_result": "Saved a recurring `account_planning` schedule for the `account_manager` role every 1 day. Next run is 2026-06-02T08:58:48.722312+00:00.",
+      "applied_at": "2026-06-01T08:58:48.730993+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 0.95,
+      "created_at": "2026-06-01T08:58:48.515264+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49"
+      ],
+      "intent_id": "64eb31e9-a30a-45d0-a29d-f3c18b7039aa",
+      "kind": "schedule.create",
+      "payload": {
+        "constraints": [
+          "One message per day maximum across all three groups combined",
+          "Rotate groups \u2014 do not post to the same group on consecutive days",
+          "Each message must have a different angle from the previous day",
+          "CTA must direct to managed account DMs only \u2014 no calls, no links, no landing pages",
+          "No emoji, no hype language, no hard close",
+          "Practical peer register \u2014 not a vendor pitch",
+          "Warmup budget limits apply \u2014 respect daily outbound_starts cap"
+        ],
+        "goal": "Send one outbound group message per day across swarmtestgroup, swarmtest2, and swarmtest3 for 7 days. Each message uses a different angle and ends with a direct CTA to move the conversation to managed account DMs. Voice: practical, no emoji, no hype, no hard sell. Rotate groups daily. Monitor DM responses and route to promoted thread reasoning surface.",
+        "interval_minutes": 1440,
+        "owner_role": "account_manager",
+        "pause_after_consecutive_misses": 2,
+        "priority": "medium",
+        "work_type": "account_planning"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "schedule_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Weekly outreach schedule \u2014 one different outbound message per day across the three test groups for 7 days.",
+      "updated_at": "2026-06-01T08:58:48.731009+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T09:02:03.765597+00:00",
+      "ambiguity": "",
+      "application_result": "Paused the recurring `account_planning` schedule.",
+      "applied_at": "2026-06-01T09:02:03.811193+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 0.99,
+      "created_at": "2026-06-01T09:02:03.758148+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49"
+      ],
+      "intent_id": "dc2094dd-74ae-4ac1-bbf3-cceb4a487e4c",
+      "kind": "schedule.pause",
+      "payload": {
+        "owner_role": "account_manager",
+        "schedule_id": "c93a2839-b6cc-477e-b657-e08b9903a0f7",
+        "work_type": "account_planning"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "schedule_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Pause the existing single-message-per-day schedule before replacing it with the corrected 3-group shape.",
+      "updated_at": "2026-06-01T09:02:03.811210+00:00"
+    },
+    {
+      "accepted_at": "2026-06-01T09:02:03.881199+00:00",
+      "ambiguity": "",
+      "application_result": "Saved a recurring `account_planning` schedule for the `account_manager` role every 1 day. Next run is 2026-06-02T09:02:03.917413+00:00.",
+      "applied_at": "2026-06-01T09:02:03.950516+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "confidence": 0.97,
+      "created_at": "2026-06-01T09:02:03.758179+00:00",
+      "grounding_refs": [
+        "session:cc8d1642-ad7b-4797-b514-fab19c4b769d",
+        "campaign:ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+        "workflow_stage:intake",
+        "artifact:bcec2233-16b0-475e-8a4f-79075f298d49"
+      ],
+      "intent_id": "fb1c9a25-276e-4383-85aa-a59f0c6d9866",
+      "kind": "schedule.create",
+      "payload": {
+        "constraints": [
+          "Three messages per day \u2014 one to each group",
+          "Each message must have a different angle from the other two sent that day",
+          "Each message must have a different angle from the previous day's message to that same group",
+          "CTA must direct to managed account DMs only \u2014 no calls, no links, no landing pages",
+          "Stagger sends across the day \u2014 do not batch all three simultaneously",
+          "No emoji, no hype language, no hard close",
+          "Practical peer register \u2014 not a vendor pitch",
+          "Warmup budget limits apply \u2014 respect daily outbound_starts cap"
+        ],
+        "goal": "Send one outbound message per day to each of swarmtestgroup (3735632929), swarmtest2 (3725229121), and swarmtest3 (3904428671). Three messages total per day. Each message uses a different angle from the others that day and from the previous day's message to the same group. Every message ends with a direct CTA to move the conversation to managed account DMs. Voice: practical, no emoji, no hype, no hard sell. Stagger sends \u2014 do not post all three at the same time. Monitor DM responses and route to promoted thread reasoning surface.",
+        "interval_minutes": 1440,
+        "owner_role": "account_manager",
+        "pause_after_consecutive_misses": 2,
+        "priority": "medium",
+        "work_type": "account_planning"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "schedule_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Corrected daily outreach schedule \u2014 one message per day to each of the three test groups, different angle per group, DM CTA on every post.",
+      "updated_at": "2026-06-01T09:02:03.950531+00:00"
+    }
+  ]
+}

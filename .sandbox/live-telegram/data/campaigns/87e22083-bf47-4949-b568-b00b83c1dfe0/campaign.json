@@ -1,0 +1,26 @@
+{
+  "agent_memory_files": [
+    "agents/orchestrator.md",
+    "agents/discovery.md",
+    "agents/strategy.md",
+    "agents/account_manager.md"
+  ],
+  "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+  "canonical_files": [
+    "overview.md",
+    "operator-intent.md",
+    "strategy.md",
+    "research-log.md",
+    "personas.md",
+    "experiments.md",
+    "next-actions.md",
+    "execution-log.md"
+  ],
+  "created_at": "2026-05-31T15:27:57.810712+00:00",
+  "operator_id": "519192084",
+  "primary_goal": "Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: \"Single-send channel safety check from SwarmKit \u2014 this should appear once only.\"",
+  "status": "active",
+  "tags": [],
+  "updated_at": "2026-05-31T20:50:26.624963+00:00",
+  "workspace_path": "C:\\Users\\ravil\\OneDrive\\Desktop\\tg-swarm\\.sandbox\\live-telegram\\data\\campaigns\\87e22083-bf47-4949-b568-b00b83c1dfe0"
+}

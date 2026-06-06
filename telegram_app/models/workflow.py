@@ -23,6 +23,9 @@ class WorkflowArtifactKind(StrEnum):
     """Structured artifacts that sessions can accumulate over time."""
 
     GENERIC = "generic"
+    CAMPAIGN_INTENT = "campaign_intent"
+    CAMPAIGN_CONTEXT = "campaign_context"
+    CONVERSION_TARGET = "conversion_target"
     CAMPAIGN_BRIEF = "campaign_brief"
     COMMUNITY_SHORTLIST = "community_shortlist"
     COMMUNITY_PROFILE = "community_profile"

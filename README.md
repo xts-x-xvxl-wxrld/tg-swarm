@@ -11,7 +11,7 @@ The active product is no longer the stock OpenSwarm terminal swarm. The live pat
 
 ## Current Status
 
-This repo is mid-transition away from its OpenSwarm and Agency Swarm roots.
+This repo now runs through the Telegram-native runtime by default, with a small amount of legacy packaging and documentation still being trimmed back.
 
 What is active now:
 
@@ -24,8 +24,8 @@ What is active now:
 What is still transitional:
 
 - some legacy docs and packaging metadata
-- inactive OpenSwarm-oriented folders and helpers
-- dependencies retained for older agent/tool modules that are not on the active runtime path
+- the npm launcher path that still shells through the packaged AgentSwarm UI
+- compatibility-oriented runtime summaries such as `workflow_stage`
 
 ## Quick Start
 
@@ -42,6 +42,7 @@ pip install -r requirements.txt
 TELEGRAM_BOT_TOKEN=...
 ANTHROPIC_API_KEY=...
 DEFAULT_MODEL=anthropic/claude-sonnet-4-6
+SUMMARY_MODEL=anthropic/claude-haiku-3-5
 ```
 
 4. Run one of the active modes:
@@ -58,6 +59,17 @@ python server.py --poll
 
 `python server.py --poll` runs a local long-polling Telegram bot, which is the simplest way to test the real message loop without deploying a webhook.
 
+## Deployment
+
+For the quickest server deployment, skip Docker and run the app directly with:
+
+- a Python virtualenv
+- a `systemd` service
+- Nginx as the reverse proxy
+- webhook mode through `python server.py`
+
+Templates and a step-by-step guide live in [deploy/no-docker/README.md](deploy/no-docker/README.md).
+
 ## Repo Map
 
 ```text
@@ -66,7 +78,6 @@ telegram_app/                     <- runtime, transport, sessions, approvals, or
 agents/                           <- active specialist agents
 prompts/                          <- orchestrator and specialist prompts
 tools/                            <- framework-agnostic helper tools
-shared_tools/                     <- shared and partly legacy integrations
 wiki/                             <- specs, plans, code index, change log
 tests/                            <- focused runtime tests
 ```

@@ -1,0 +1,26 @@
+{
+  "agent_memory_files": [
+    "agents/orchestrator.md",
+    "agents/discovery.md",
+    "agents/strategy.md",
+    "agents/account_manager.md"
+  ],
+  "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+  "canonical_files": [
+    "overview.md",
+    "operator-intent.md",
+    "strategy.md",
+    "research-log.md",
+    "personas.md",
+    "experiments.md",
+    "next-actions.md",
+    "execution-log.md"
+  ],
+  "created_at": "2026-06-01T08:18:45.380773+00:00",
+  "operator_id": "519192084",
+  "primary_goal": "so whats the status now?",
+  "status": "active",
+  "tags": [],
+  "updated_at": "2026-06-01T09:02:40.144521+00:00",
+  "workspace_path": "C:\\Users\\ravil\\OneDrive\\Desktop\\tg-swarm\\data\\campaigns\\ae5447b0-1f04-4371-b8cc-ad4719f69a1c"
+}

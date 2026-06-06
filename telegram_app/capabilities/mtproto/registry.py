@@ -8,6 +8,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from telegram_app.capabilities.mtproto.warmup import (
+    WarmupActionClass,
+    WarmupBudgetStatus,
+    build_budget_status,
+    ensure_onboarded_at,
+    increment_budget_usage,
+    summarize_warmup,
+    utc_now as warmup_utc_now,
+)
+
 JOIN_WINDOW_HOURS = 24
 JOIN_LIMIT_PER_WINDOW = 3
 
@@ -39,6 +49,7 @@ class AccountRecord:
     phone: str
     tier: str = "standard"
     health: str = "active"
+    onboarded_at: str = ""
     join_count_24h: int = 0
     last_active: str = ""
     join_window_started_at: str = ""
@@ -53,6 +64,7 @@ class AccountRecord:
             phone=str(payload.get("phone", "")).strip(),
             tier=str(payload.get("tier", "standard")).strip() or "standard",
             health=str(payload.get("health", "active")).strip() or "active",
+            onboarded_at=str(payload.get("onboarded_at", "")).strip(),
             join_count_24h=max(int(payload.get("join_count_24h", 0) or 0), 0),
             last_active=str(payload.get("last_active", "")).strip(),
             join_window_started_at=str(payload.get("join_window_started_at", "")).strip(),
@@ -109,6 +121,7 @@ class AccountRegistry:
         """Create or update an account record."""
         accounts = self.list_accounts()
         self._refresh_join_window(record)
+        record.onboarded_at = ensure_onboarded_at(record.onboarded_at, now=warmup_utc_now())
 
         for index, existing in enumerate(accounts):
             if existing.account_id == record.account_id:
@@ -137,46 +150,93 @@ class AccountRegistry:
 
     def can_join(self, account_id: str) -> tuple[bool, str]:
         """Return whether the account can join another community right now."""
-        record = self.get_account(account_id)
-        if record is None:
-            return False, f"Unknown Telegram account: {account_id}"
-
-        if record.health == "banned":
-            return False, f"Telegram account {account_id} is banned."
-        if record.health == "flagged":
-            return False, f"Telegram account {account_id} is flagged and should not join communities until reviewed."
-
-        rate_limit_until = parse_iso8601(record.rate_limit_until)
-        if rate_limit_until is not None and rate_limit_until > utc_now():
-            wait_seconds = int((rate_limit_until - utc_now()).total_seconds())
-            return False, f"Telegram account {account_id} is rate-limited for another {wait_seconds} seconds."
-
-        self._refresh_join_window(record)
-        if record.join_count_24h >= JOIN_LIMIT_PER_WINDOW:
-            return False, (
-                f"Telegram account {account_id} has reached the {JOIN_LIMIT_PER_WINDOW} joins per "
-                f"{JOIN_WINDOW_HOURS}-hour limit."
-            )
-
+        allowed, reason, _status = self.can_perform_action(account_id, action="join")
+        if not allowed:
+            return False, reason
         return True, ""
 
     def can_send(self, account_id: str) -> tuple[bool, str]:
         """Return whether the account can send a Telegram message right now."""
+        allowed, reason, _status = self.can_perform_action(account_id, action="send")
+        if not allowed:
+            return False, reason
+        return True, ""
+
+    def can_perform_action(
+        self,
+        account_id: str,
+        *,
+        action: str,
+        now: datetime | None = None,
+    ) -> tuple[bool, str, WarmupBudgetStatus | None]:
+        """Return whether an account may perform one action under health, cooldown, and warmup budgets."""
         record = self.get_account(account_id)
         if record is None:
-            return False, f"Unknown Telegram account: {account_id}"
+            return False, f"Unknown Telegram account: {account_id}", None
 
+        current_time = now or utc_now()
         if record.health == "banned":
-            return False, f"Telegram account {account_id} is banned."
+            return False, f"Telegram account {account_id} is banned.", None
         if record.health == "flagged":
-            return False, f"Telegram account {account_id} is flagged and should not send messages until reviewed."
+            return False, f"Telegram account {account_id} is flagged and should not perform managed actions until reviewed.", None
 
         rate_limit_until = parse_iso8601(record.rate_limit_until)
-        if rate_limit_until is not None and rate_limit_until > utc_now():
-            wait_seconds = int((rate_limit_until - utc_now()).total_seconds())
-            return False, f"Telegram account {account_id} is rate-limited for another {wait_seconds} seconds."
+        if rate_limit_until is not None and rate_limit_until > current_time:
+            wait_seconds = int((rate_limit_until - current_time).total_seconds())
+            return (
+                False,
+                f"Telegram account {account_id} is rate-limited for another {wait_seconds} seconds.",
+                None,
+            )
 
-        return True, ""
+        action_class = self._warmup_action_class_for(action)
+        if action_class is None:
+            return True, "", None
+
+        status = build_budget_status(
+            record.metadata,
+            onboarded_at=record.onboarded_at,
+            action_class=action_class,
+            now=current_time,
+        )
+        if action_class is WarmupActionClass.JOINS:
+            self._refresh_join_window(record)
+            status = build_budget_status(
+                record.metadata,
+                onboarded_at=record.onboarded_at,
+                action_class=action_class,
+                now=current_time,
+            )
+            if record.join_count_24h >= status.budget_limit:
+                return (
+                    False,
+                    (
+                        f"Telegram account {account_id} has reached the {status.budget_limit} joins per "
+                        f"{JOIN_WINDOW_HOURS}-hour warmup limit for {status.stage_label.replace('_', ' ')}."
+                    ),
+                    status,
+                )
+        elif status.remaining_count < 1:
+            return (
+                False,
+                (
+                    f"Telegram account {account_id} reached its `{action_class.value}` warmup budget "
+                    f"({status.budget_limit} actions per {JOIN_WINDOW_HOURS}-hour window on {status.stage_label.replace('_', ' ')})."
+                ),
+                status,
+            )
+        return True, "", status
+
+    def describe_warmup(self, account_id: str, *, now: datetime | None = None) -> dict[str, object]:
+        """Return a prompt-safe warmup summary for one account."""
+        record = self.get_account(account_id)
+        if record is None:
+            return {}
+        return summarize_warmup(
+            record.metadata,
+            onboarded_at=record.onboarded_at,
+            now=now or utc_now(),
+        )
 
     def mark_join_success(self, account_id: str, *, community_id: str = "") -> AccountRecord | None:
         """Update pacing state after a successful join."""
@@ -192,6 +252,12 @@ class AccountRegistry:
         record.last_active = to_iso8601(now)
         record.health = "active"
         record.rate_limit_until = ""
+        record.metadata = increment_budget_usage(
+            record.metadata,
+            onboarded_at=record.onboarded_at,
+            action_class=WarmupActionClass.JOINS,
+            now=now,
+        )
         self._record_action(
             record,
             action="join",
@@ -234,6 +300,16 @@ class AccountRegistry:
 
     def mark_send_success(self, account_id: str, *, chat_id: str = "") -> AccountRecord | None:
         """Update state after a successful outbound Telegram send."""
+        return self.mark_action_success(account_id, action="send", target=chat_id)
+
+    def mark_action_success(
+        self,
+        account_id: str,
+        *,
+        action: str,
+        target: str = "",
+    ) -> AccountRecord | None:
+        """Update state after a successful managed-account action."""
         record = self.get_account(account_id)
         if record is None:
             return None
@@ -241,10 +317,18 @@ class AccountRegistry:
         record.last_active = to_iso8601(utc_now())
         record.health = "active"
         record.rate_limit_until = ""
+        action_class = self._warmup_action_class_for(action)
+        if action_class is not None:
+            record.metadata = increment_budget_usage(
+                record.metadata,
+                onboarded_at=record.onboarded_at,
+                action_class=action_class,
+                now=utc_now(),
+            )
         self._record_action(
             record,
-            action="send",
-            target=chat_id,
+            action=action,
+            target=target,
             outcome="success",
         )
         return self.save_account(record)
@@ -260,6 +344,28 @@ class AccountRegistry:
         outcome: str = "failed",
     ) -> AccountRecord | None:
         """Update state after a failed outbound Telegram send."""
+        return self.mark_action_failure(
+            account_id,
+            action="send",
+            target=chat_id,
+            health=health,
+            wait_seconds=wait_seconds,
+            error=error,
+            outcome=outcome,
+        )
+
+    def mark_action_failure(
+        self,
+        account_id: str,
+        *,
+        action: str,
+        target: str = "",
+        health: str | None = None,
+        wait_seconds: int | None = None,
+        error: str | None = None,
+        outcome: str = "failed",
+    ) -> AccountRecord | None:
+        """Update state after a failed managed-account action."""
         record = self.get_account(account_id)
         if record is None:
             return None
@@ -273,8 +379,8 @@ class AccountRegistry:
             record.metadata["last_error"] = error
         self._record_action(
             record,
-            action="send",
-            target=chat_id,
+            action=action,
+            target=target,
             outcome=outcome,
             error=error,
             wait_seconds=wait_seconds,
@@ -341,3 +447,19 @@ class AccountRegistry:
         record.metadata[f"last_{action}"] = payload
         if wait_seconds is not None and wait_seconds > 0:
             record.metadata["recent_rate_limit"] = payload
+
+    def _warmup_action_class_for(self, action: str) -> WarmupActionClass | None:
+        normalized = action.strip().lower()
+        if normalized in {"get_membership", "read_messages", "get_dialog_history", "list_recent_dialogs", "mark_read", "leave_dialog"}:
+            return WarmupActionClass.READS
+        if normalized in {"join", "join_community"}:
+            return WarmupActionClass.JOINS
+        if normalized == "send_group_reply":
+            return WarmupActionClass.GROUP_REPLIES
+        if normalized == "send_dm_reply":
+            return WarmupActionClass.DM_REPLIES
+        if normalized == "follow_up_reply":
+            return WarmupActionClass.FOLLOW_UP_REPLIES
+        if normalized in {"send", "send_message", "send_group_message"}:
+            return WarmupActionClass.OUTBOUND_STARTS
+        return None

@@ -1,0 +1,56 @@
+# Operator Intent
+
+- Objective: Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: "Single-send channel safety check from SwarmKit — this should appear once only."
+- Target audience: the other account
+- Offer: n/a
+- Geography: that case
+- Language: n/a
+
+## Notes
+
+- https://t.me/tgoutreachtest https://t.me/DTOMTESTCHANNE Please inspect them, use them as initial discovery anchors, and keep all activity limited to our test spaces
+- Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies. Important distinction: - Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog - So if you try to send by using the low-risk direct-action path, that is still unsupported - But if you are planning or executing autonomous outreach inside the sandbox, group messages can now be queued/executed through the proper send path For this sandbox, you may use autonomous group outreach in our test spaces
+- Queue one outbound sandbox group message into @swarmtestgroup from one joined account saying exactly: "Single-send safety check from SwarmKit — this message should appear once only." After queueing it, report: 1. which account was selected 2. the live action id 3. whether the action succeeded, failed, or is awaiting execution Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead
+- Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: "Single-send channel safety check from SwarmKit — this should appear once only." After queueing it, report: 1. which account was selected 2. the live action id 3. whether the action succeeded, failed, or is awaiting execution Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead
+
+## Operator preferences
+
+- Please inspect them, use them as initial discovery anchors, and keep all activity limited to our test spaces.
+
+## Execution constraints
+
+- Goal: test our Telegram runtime in a private sandbox first, then against our own public Telegram test spaces only. Use these as seed targets:
+- Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies.
+- - Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog
+- Queue one outbound sandbox group message into @swarmtestgroup from one joined account saying exactly: "Single-send safety check from SwarmKit — this message should appear once only."
+- Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead.
+- Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: "Single-send channel safety check from SwarmKit — this should appear once only."
+
+## Open ambiguities
+
+- can we speed up the joins so they happen immediately?
+- which account did you use and where did you send it?
+
+## Source messages
+
+- Goal: test our Telegram runtime in a private sandbox first, then against our own public Telegram test spaces only. Use these as seed targets: https://t.me/tgoutreachtest https://t.me/DTOMTESTCHANNE Please inspect them, use them as initial discovery anchors, and keep all activity limited to our test spaces.
+- this isn't a channel https://t.me/tgoutreachtest this is a group
+- okay, I see. try this one out https://t.me/swarmtestgroup
+- well I am the audience, the developer. and like let's set up a mock scenario for the campaign. basically to test the full capability of you...
+- you can join the groups but there's nothing in these communities so let's just join for now
+- can we speed up the joins so they happen immediately?
+- okay, the joins went through. let's send some outbound messages into these groups
+- 1: Draft something based on the SwarmKit mock scenario we discussed; 2 : do both groups with both accounts; 3 : let's do auto approve
+- go
+- okay, so I rewired the auto send and now you can queue the messages
+- Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies. Important distinction: - Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog - So if you try to send by using the low-risk direct-action path, that is still unsupported - But if you are planning or executing autonomous outreach inside the sandbox, group messages can now be queued/executed through the proper send path For this sandbox, you may use autonomous group outreach in our test spaces.
+- Using the authorized autonomous send path, draft and queue one outbound group message for @swarmtestgroup in our sandbox.
+- sure do the same in parallel for @DTOMTESTCHANNE
+- Queue one outbound sandbox group message into @swarmtestgroup from one joined account saying: "Quick sandbox check from SwarmKit — testing direct operator-triggered outbound sends."
+- retry the message because it failed and I fixed the issue
+- now try for the other account
+- okay, send a message to the @DTOMTESTCHANNE
+- idk make something up and send it. its a test channel so it doesnt matter
+- which account did you use and where did you send it?
+- Queue one outbound sandbox group message into @swarmtestgroup from one joined account saying exactly: "Single-send safety check from SwarmKit — this message should appear once only." After queueing it, report: 1. which account was selected 2. the live action id 3. whether the action succeeded, failed, or is awaiting execution Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead.
+- Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: "Single-send channel safety check from SwarmKit — this should appear once only." After queueing it, report: 1. which account was selected 2. the live action id 3. whether the action succeeded, failed, or is awaiting execution Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead.

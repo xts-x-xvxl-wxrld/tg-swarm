@@ -49,6 +49,9 @@ class WorkItemManager:
         priority: WorkItemPriority = WorkItemPriority.MEDIUM,
         due_at: datetime | None = None,
         related_memory_refs: list[str] | None = None,
+        trigger_source: str = "",
+        refresh_reason: str = "",
+        context_refs: list[str] | None = None,
         schedule_id: str | None = None,
         status: WorkItemStatus = WorkItemStatus.IN_PROGRESS,
     ) -> WorkItemRecord:
@@ -70,6 +73,9 @@ class WorkItemManager:
                 work_item.priority = priority
                 work_item.due_at = due_at
                 work_item.related_memory_refs = list(related_memory_refs or [])
+                work_item.trigger_source = trigger_source.strip()
+                work_item.refresh_reason = refresh_reason.strip()
+                work_item.context_refs = list(context_refs or [])
                 if work_item.status is WorkItemStatus.PENDING and status is not WorkItemStatus.PENDING:
                     work_item.status = status
                 work_item.touch()
@@ -87,7 +93,13 @@ class WorkItemManager:
                 status=status,
                 due_at=due_at,
                 related_memory_refs=list(related_memory_refs or []),
+                trigger_source=trigger_source.strip(),
+                refresh_reason=refresh_reason.strip(),
+                context_refs=list(context_refs or []),
                 schedule_id=schedule_id,
+                completed_at=datetime.now(UTC)
+                if status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
+                else None,
             )
             self.save(work_item)
             return work_item
@@ -114,6 +126,26 @@ class WorkItemManager:
     def list_open_for_campaign(self, campaign_id: str) -> list[WorkItemRecord]:
         """Return active non-terminal work items for a campaign."""
         return [item for item in self.list_for_campaign(campaign_id) if item.status in _OPEN_STATUSES]
+
+    def find_latest(
+        self,
+        campaign_id: str,
+        *,
+        work_type: str | None = None,
+        owner_role: str | None = None,
+        statuses: set[WorkItemStatus] | None = None,
+    ) -> WorkItemRecord | None:
+        """Return the most recently updated work item matching the requested filters."""
+        work_items = self.list_for_campaign(campaign_id)
+        if work_type is not None:
+            work_items = [item for item in work_items if item.work_type == work_type]
+        if owner_role is not None:
+            work_items = [item for item in work_items if item.owner_role == owner_role]
+        if statuses is not None:
+            work_items = [item for item in work_items if item.status in statuses]
+        if not work_items:
+            return None
+        return max(work_items, key=lambda item: item.updated_at)
 
     def get_primary_open_item(self, campaign_id: str) -> WorkItemRecord | None:
         """Return the highest-signal active work item for routing."""
@@ -156,6 +188,9 @@ class WorkItemManager:
         result_summary: str | None = None,
         escalation_reason: str | None = None,
         related_memory_refs: list[str] | None = None,
+        trigger_source: str | None = None,
+        refresh_reason: str | None = None,
+        context_refs: list[str] | None = None,
     ) -> WorkItemRecord | None:
         """Update the lifecycle state and summary fields for a work item."""
         with self._lock:
@@ -170,6 +205,12 @@ class WorkItemManager:
                 work_item.escalation_reason = escalation_reason
             if related_memory_refs is not None:
                 work_item.related_memory_refs = list(related_memory_refs)
+            if trigger_source is not None:
+                work_item.trigger_source = trigger_source.strip()
+            if refresh_reason is not None:
+                work_item.refresh_reason = refresh_reason.strip()
+            if context_refs is not None:
+                work_item.context_refs = list(context_refs)
             if status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}:
                 work_item.completed_at = datetime.now(UTC)
             elif status in _OPEN_STATUSES:

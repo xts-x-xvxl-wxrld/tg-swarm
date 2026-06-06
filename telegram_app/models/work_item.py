@@ -41,6 +41,9 @@ class WorkItemRecord:
     status: WorkItemStatus = WorkItemStatus.PENDING
     due_at: datetime | None = None
     related_memory_refs: list[str] = field(default_factory=list)
+    trigger_source: str = ""
+    refresh_reason: str = ""
+    context_refs: list[str] = field(default_factory=list)
     result_summary: str = ""
     escalation_reason: str = ""
     schedule_id: str | None = None
@@ -65,6 +68,9 @@ class WorkItemRecord:
             "status": self.status.value,
             "due_at": self.due_at.isoformat() if self.due_at is not None else None,
             "related_memory_refs": list(self.related_memory_refs),
+            "trigger_source": self.trigger_source,
+            "refresh_reason": self.refresh_reason,
+            "context_refs": list(self.context_refs),
             "result_summary": self.result_summary,
             "escalation_reason": self.escalation_reason,
             "schedule_id": self.schedule_id,
@@ -83,6 +89,7 @@ class WorkItemRecord:
         status = WorkItemStatus._value2member_map_.get(raw_status, WorkItemStatus.PENDING)
         constraints = payload.get("constraints", [])
         related_memory_refs = payload.get("related_memory_refs", [])
+        context_refs = payload.get("context_refs", [])
         return cls(
             work_item_id=str(payload.get("work_item_id", "")),
             campaign_id=str(payload.get("campaign_id", "")),
@@ -94,6 +101,9 @@ class WorkItemRecord:
             status=status,
             due_at=datetime.fromisoformat(payload["due_at"]) if payload.get("due_at") else None,
             related_memory_refs=list(related_memory_refs) if isinstance(related_memory_refs, list) else [],
+            trigger_source=str(payload.get("trigger_source", "")),
+            refresh_reason=str(payload.get("refresh_reason", "")),
+            context_refs=list(context_refs) if isinstance(context_refs, list) else [],
             result_summary=str(payload.get("result_summary", "")),
             escalation_reason=str(payload.get("escalation_reason", "")),
             schedule_id=payload.get("schedule_id"),

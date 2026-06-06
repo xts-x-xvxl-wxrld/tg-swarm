@@ -1,0 +1,65 @@
+{
+  "schedules": [
+    {
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "consecutive_miss_count": 0,
+      "constraints": [
+        "One message per day maximum across all three groups combined",
+        "Rotate groups \u2014 do not post to the same group on consecutive days",
+        "Each message must have a different angle from the previous day",
+        "CTA must direct to managed account DMs only \u2014 no calls, no links, no landing pages",
+        "No emoji, no hype language, no hard close",
+        "Practical peer register \u2014 not a vendor pitch",
+        "Warmup budget limits apply \u2014 respect daily outbound_starts cap"
+      ],
+      "created_at": "2026-06-01T08:58:48.723117+00:00",
+      "evaluation_metric": "",
+      "goal": "Send one outbound group message per day across swarmtestgroup, swarmtest2, and swarmtest3 for 7 days. Each message uses a different angle and ends with a direct CTA to move the conversation to managed account DMs. Voice: practical, no emoji, no hype, no hard sell. Rotate groups daily. Monitor DM responses and route to promoted thread reasoning surface.",
+      "interval_minutes": 1440,
+      "last_error": "",
+      "last_outcome_summary": "",
+      "last_outcome_value": null,
+      "last_run_at": null,
+      "minimum_value": null,
+      "next_run_at": "2026-06-02T08:58:48.722312+00:00",
+      "owner_role": "account_manager",
+      "pause_after_consecutive_misses": 2,
+      "priority": "medium",
+      "schedule_id": "c93a2839-b6cc-477e-b657-e08b9903a0f7",
+      "status": "paused",
+      "updated_at": "2026-06-01T09:02:03.805715+00:00",
+      "work_type": "account_planning"
+    },
+    {
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "consecutive_miss_count": 0,
+      "constraints": [
+        "Three messages per day \u2014 one to each group",
+        "Each message must have a different angle from the other two sent that day",
+        "Each message must have a different angle from the previous day's message to that same group",
+        "CTA must direct to managed account DMs only \u2014 no calls, no links, no landing pages",
+        "Stagger sends across the day \u2014 do not batch all three simultaneously",
+        "No emoji, no hype language, no hard close",
+        "Practical peer register \u2014 not a vendor pitch",
+        "Warmup budget limits apply \u2014 respect daily outbound_starts cap"
+      ],
+      "created_at": "2026-06-01T09:02:03.917451+00:00",
+      "evaluation_metric": "",
+      "goal": "Send one outbound message per day to each of swarmtestgroup (3735632929), swarmtest2 (3725229121), and swarmtest3 (3904428671). Three messages total per day. Each message uses a different angle from the others that day and from the previous day's message to the same group. Every message ends with a direct CTA to move the conversation to managed account DMs. Voice: practical, no emoji, no hype, no hard sell. Stagger sends \u2014 do not post all three at the same time. Monitor DM responses and route to promoted thread reasoning surface.",
+      "interval_minutes": 1440,
+      "last_error": "",
+      "last_outcome_summary": "",
+      "last_outcome_value": null,
+      "last_run_at": null,
+      "minimum_value": null,
+      "next_run_at": "2026-06-02T09:02:03.917413+00:00",
+      "owner_role": "account_manager",
+      "pause_after_consecutive_misses": 2,
+      "priority": "medium",
+      "schedule_id": "4fa9bbab-aaf1-43ad-a355-ff79edb3d8b1",
+      "status": "active",
+      "updated_at": "2026-06-01T09:02:03.917464+00:00",
+      "work_type": "account_planning"
+    }
+  ]
+}

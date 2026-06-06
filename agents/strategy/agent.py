@@ -1,23 +1,34 @@
-"""Strategy specialist agent for community-aware messaging playbook generation."""
+"""Strategy planning-surface agent for community-aware messaging playbook generation."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import anthropic
 
+from telegram_app.agent_runtime import AgentRuntimeBroker
 from telegram_app.campaign_memory import CampaignMemoryManager
-from telegram_app.capabilities import CommunityCapability
+from telegram_app.capabilities import (
+    AccountCapability,
+    CommunityCapability,
+    MembershipCapability,
+    MessagingCapability,
+)
+from telegram_app.llm import TelegramCapabilityToolbox, resolve_model
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import SessionRecord, WorkflowArtifact, WorkflowArtifactKind
 from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.sessions import SessionManager
-from telegram_app.workflow_validation import parse_marked_json_block, validate_strategy_playbook
+from telegram_app.workflow_validation import (
+    parse_marked_json_block,
+    parse_output_proposal_list,
+    strip_marked_block,
+    validate_strategy_playbook,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,15 +132,6 @@ def _load_prompt(name: str) -> str:
     return (REPO_ROOT / "prompts" / name).read_text(encoding="utf-8")
 
 
-def _resolve_model() -> str:
-    model = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6").strip()
-    if "/" in model:
-        model = model.split("/", 1)[1]
-    if not model.startswith("claude-"):
-        model = "claude-sonnet-4-6"
-    return model
-
-
 def _get_latest_artifact_of_kind(
     session_manager: SessionManager,
     session: SessionRecord,
@@ -142,19 +144,34 @@ def _get_latest_artifact_of_kind(
 
 
 class StrategyAgent:
-    """Specialist agent for community-aware messaging playbook generation."""
+    """Planning-surface agent for community-aware messaging playbook generation."""
 
     def __init__(
         self,
         session_manager: SessionManager | None = None,
+        account_capability: AccountCapability | None = None,
         community_capability: CommunityCapability | None = None,
+        membership_capability: MembershipCapability | None = None,
+        messaging_capability: MessagingCapability | None = None,
         monitor: RuntimeEventLogger | None = None,
+        runtime_broker: AgentRuntimeBroker | None = None,
     ) -> None:
         self._session_manager = session_manager
+        self._account_capability = account_capability
         self._community_capability = community_capability
+        self._membership_capability = membership_capability
+        self._messaging_capability = messaging_capability
         self._monitor = monitor or NullRuntimeEventLogger()
+        self._runtime_broker = runtime_broker
         self._memory_manager = CampaignMemoryManager()
         self._client = anthropic.Anthropic()
+        self._toolbox = TelegramCapabilityToolbox(
+            account_capability=account_capability,
+            community_capability=community_capability,
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+        )
+        self.last_proposal_payloads: list[dict[str, Any]] = []
 
     def run(
         self,
@@ -187,7 +204,15 @@ class StrategyAgent:
         system = [
             {"type": "text", "text": _load_prompt("strategy.md")},
             {"type": "text", "text": _load_prompt("shared_runtime.md")},
-            {"type": "text", "text": build_runtime_context(session, pending_approval=None)},
+            {
+                "type": "text",
+                "text": build_runtime_context(
+                    session,
+                    pending_approval=None,
+                    work_type="strategy",
+                    agent_runtime_broker=self._runtime_broker,
+                ),
+            },
         ]
         specialist_memory = self._memory_manager.load_agent_prompt_memory(session, "strategy")
         if specialist_memory:
@@ -200,7 +225,7 @@ class StrategyAgent:
             )
         messages = [{"role": "user", "content": user_content}]
 
-        model = _resolve_model()
+        model = resolve_model()
         logger.info("StrategyAgent calling Anthropic API model=%s", model)
         self._monitor.record_event(
             component="strategy_agent",
@@ -215,7 +240,8 @@ class StrategyAgent:
         )
 
         try:
-            api_response = self._client.messages.create(
+            completion = self._toolbox.run_completion(
+                client=self._client,
                 model=model,
                 max_tokens=4096,
                 system=system,
@@ -231,9 +257,8 @@ class StrategyAgent:
             )
             raise
 
-        final_output = "".join(
-            block.text for block in api_response.content if hasattr(block, "text")
-        ).strip()
+        final_output = completion.final_output
+        self.last_proposal_payloads = parse_output_proposal_list(final_output) or []
 
         playbook_data = self._parse_playbook_json(final_output)
         operator_text = self._strip_json_block(final_output)
@@ -283,6 +308,8 @@ class StrategyAgent:
                 "operator_text": operator_text,
                 "artifact_id": artifact.artifact_id if artifact is not None else "",
                 "validation_error": validation_error or "",
+                "tool_call_count": completion.tool_call_count,
+                "tool_names": completion.tool_names,
             },
         )
         return operator_text, artifact
@@ -322,7 +349,9 @@ class StrategyAgent:
         self._memory_manager.write_agent_working_memory(session, "strategy", "\n".join(lines))
 
     def _build_capability_context(self, session: SessionRecord) -> list[str]:
-        if self._session_manager is None or self._community_capability is None:
+        if self._session_manager is None or (
+            self._community_capability is None and self._runtime_broker is None
+        ):
             return ["Community capability context: unavailable"]
 
         shortlist = _get_latest_artifact_of_kind(
@@ -346,14 +375,22 @@ class StrategyAgent:
                 if not community_id:
                     continue
 
-                profile_result = self._community_capability.get_profile(community_id)
-                if not profile_result.success:
+                live_profile = (
+                    self._runtime_broker.get_community_profile_snapshot(community_id)
+                    if self._runtime_broker is not None
+                    else None
+                )
+                if live_profile is None and self._community_capability is not None:
+                    profile_result = self._community_capability.get_profile(community_id)
+                    if profile_result.success:
+                        live_profile = _prompt_safe_profile_data(profile_result.data)
+                if live_profile is None:
                     continue
 
                 profile_snapshots.append(
                     {
                         "community_id": community_id,
-                        "data": _prompt_safe_profile_data(profile_result.data),
+                        "data": live_profile,
                         "source": "live_profile_read",
                     }
                 )
@@ -372,10 +409,7 @@ class StrategyAgent:
         return parse_marked_json_block(output, STRATEGY_PLAYBOOK_JSON_MARKER) or {}
 
     def _strip_json_block(self, output: str) -> str:
-        if STRATEGY_PLAYBOOK_JSON_MARKER not in output:
-            return output.strip()
-        operator_text, _, _ = output.partition(STRATEGY_PLAYBOOK_JSON_MARKER)
-        return operator_text.strip()
+        return strip_marked_block(output, STRATEGY_PLAYBOOK_JSON_MARKER)
 
     def _build_invalid_playbook_response(self, operator_text: str, validation_error: str) -> str:
         summary = operator_text.strip() or "I generated a strategy draft, but I could not trust its structured output."

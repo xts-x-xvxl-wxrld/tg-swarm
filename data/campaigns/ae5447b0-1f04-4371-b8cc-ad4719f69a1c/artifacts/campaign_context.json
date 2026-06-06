@@ -1,0 +1,50 @@
+{
+  "artifact_id": "56da3bb8-ebc4-4009-8a6c-fb813d85c64d",
+  "created_at": "2026-06-01T08:18:45.718835+00:00",
+  "data": {
+    "execution_constraints": [
+      "Fit matters more than volume. Avoid communities where moderation risk is likely to outweigh learning.",
+      "no I mean like every group should recieve an outbound once a week."
+    ],
+    "open_ambiguities": [
+      "okay? what do you know abt this campaign?",
+      "so?",
+      "are you invoking skills for copy writing?",
+      "so whats the status now?"
+    ],
+    "operator_preferences": [],
+    "persistent_decisions": [],
+    "revision_threads": [],
+    "voice_profile": {
+      "avoid_traits": [
+        "not ecommerce support teams. Keep the tone practical",
+        "avoid hard selling. Use our private test groups for discovery"
+      ],
+      "cta_preferences": [
+        "okay, we will only operate in out test groups. https://t.me/swarmtest3 https://t.me/swarmtest2 https://t.me/swarmtestgroup. We want to make group outreach gradually but still proactively, we want to initiate conversations, alsthough do it with caution. Use direct CTA's and convert to your own dms",
+        "let's change the cta from calls to like transfering them into managed accounts dm's",
+        "okay, good copy and weekly schedule every day sending a different outbound message with a cta"
+      ],
+      "preferred_traits": [
+        "Goal: Build a cautious Telegram campaign for BriefBridge",
+        "an AI-assisted lead intake workspace for small service agencies. It pulls website forms",
+        "shared inbox leads",
+        "Telegram inquiries into one queue",
+        "suggests follow-up drafts for human review. We want agency founders",
+        "operators with messy inbound lead flow",
+        "low-hype",
+        "emoji-free. In groups",
+        "stay value-first",
+        "strategy",
+        "account planning. The main conversion target is a 20-minute workflow audit call."
+      ],
+      "style_notes": [
+        "are you invoking skills for copy writing?"
+      ]
+    }
+  },
+  "kind": "campaign_context",
+  "summary": "Campaign context tracks 11 voice preferences, 2 execution constraints, 4 open ambiguities.",
+  "title": "Campaign context profile",
+  "updated_at": "2026-06-01T09:02:39.934205+00:00"
+}

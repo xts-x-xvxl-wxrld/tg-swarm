@@ -1,0 +1,133 @@
+{
+  "accounts": [
+    {
+      "account_id": "account_38671210769",
+      "health": "active",
+      "join_count_24h": 2,
+      "join_window_started_at": "2026-05-31T15:54:11.554462+00:00",
+      "last_active": "2026-05-31T21:12:01.212150+00:00",
+      "metadata": {
+        "auth_flow": {
+          "method": "telegram_phone_login"
+        },
+        "first_name": "Maxx",
+        "id": 8764429189,
+        "last_action": {
+          "action": "join",
+          "outcome": "success",
+          "recorded_at": "2026-05-31T21:12:01.212730+00:00",
+          "target": "swarmtest2"
+        },
+        "last_error": "Telegram sending a message failed with a transient error: ",
+        "last_join": {
+          "action": "join",
+          "outcome": "success",
+          "recorded_at": "2026-05-31T21:12:01.212730+00:00",
+          "target": "swarmtest2"
+        },
+        "last_name": "",
+        "last_send": {
+          "action": "send",
+          "error": "Telegram sending a message failed with a transient error: ",
+          "outcome": "transient_error",
+          "recorded_at": "2026-05-31T20:46:41.260372+00:00",
+          "target": "swarmtestgroup"
+        },
+        "onboarded_at": "2026-05-31T15:01:10.180476+00:00",
+        "phone": "38671210769",
+        "username": "maximovkaxxx"
+      },
+      "onboarded_at": "2026-05-31T15:01:10.180844+00:00",
+      "phone": "+38671210769",
+      "rate_limit_until": "",
+      "tier": "standard"
+    },
+    {
+      "account_id": "account_38671210726",
+      "health": "active",
+      "join_count_24h": 1,
+      "join_window_started_at": "2026-05-31T15:54:17.269474+00:00",
+      "last_active": "2026-05-31T20:51:02.427175+00:00",
+      "metadata": {
+        "auth_flow": {
+          "method": "telegram_phone_login"
+        },
+        "first_name": "Danil",
+        "id": 8594488760,
+        "last_action": {
+          "action": "send",
+          "error": "Telegram sending a message failed with a transient error: ",
+          "outcome": "transient_error",
+          "recorded_at": "2026-05-31T20:51:02.427186+00:00",
+          "target": "DTOMTESTCHANNE"
+        },
+        "last_error": "Telegram sending a message failed with a transient error: ",
+        "last_join": {
+          "action": "join",
+          "outcome": "success",
+          "recorded_at": "2026-05-31T15:54:17.269769+00:00",
+          "target": "DTOMTESTCHANNE"
+        },
+        "last_name": "Danilovich",
+        "last_send": {
+          "action": "send",
+          "error": "Telegram sending a message failed with a transient error: ",
+          "outcome": "transient_error",
+          "recorded_at": "2026-05-31T20:51:02.427186+00:00",
+          "target": "DTOMTESTCHANNE"
+        },
+        "onboarded_at": "2026-05-31T15:07:50.709827+00:00",
+        "phone": "38671210726",
+        "username": "dxnxlxvxch"
+      },
+      "onboarded_at": "2026-05-31T15:07:50.710308+00:00",
+      "phone": "+38671210726",
+      "rate_limit_until": "",
+      "tier": "standard"
+    },
+    {
+      "account_id": "account_38671210719",
+      "health": "active",
+      "join_count_24h": 0,
+      "join_window_started_at": "",
+      "last_active": "2026-05-31T15:12:42.613677+00:00",
+      "metadata": {
+        "auth_flow": {
+          "method": "telegram_phone_login"
+        },
+        "first_name": "Semyon",
+        "id": 8764818079,
+        "last_name": "Dolgorukiy",
+        "onboarded_at": "2026-05-31T15:12:42.613692+00:00",
+        "phone": "38671210719",
+        "username": "simonchiiiik"
+      },
+      "onboarded_at": "2026-05-31T15:12:42.614055+00:00",
+      "phone": "+38671210719",
+      "rate_limit_until": "",
+      "tier": "standard"
+    },
+    {
+      "account_id": "account_38671210770",
+      "health": "active",
+      "join_count_24h": 0,
+      "join_window_started_at": "",
+      "last_active": "2026-05-31T15:16:15.811301+00:00",
+      "metadata": {
+        "auth_flow": {
+          "method": "telegram_phone_login"
+        },
+        "first_name": "Alex",
+        "id": 8560398769,
+        "last_name": "Voronin",
+        "onboarded_at": "2026-05-31T15:16:15.811317+00:00",
+        "phone": "38671210770",
+        "username": "alexeyvrnn"
+      },
+      "onboarded_at": "2026-05-31T15:16:15.812702+00:00",
+      "phone": "+38671210770",
+      "rate_limit_until": "",
+      "tier": "standard"
+    }
+  ]
+}

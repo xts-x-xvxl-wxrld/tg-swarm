@@ -1,0 +1,29 @@
+{
+  "artifact_id": "7d5819ce-bef3-486e-8b45-7594e97d1719",
+  "created_at": "2026-05-31T21:09:34.636604+00:00",
+  "data": {
+    "execution_constraints": [
+      "Goal: run a realistic end-to-end outbound Telegram sandbox campaign inside our owned test groups only.",
+      "- Use only our test groups/supergroups, not channels",
+      "- You may join eligible groups, read them, post one outbound opener, handle inbound group replies, and reply in DMs only after the other person messages first",
+      "- Do not use or target broadcast channels",
+      "- Do not expand outside our test spaces",
+      "2. queue only allowed actions",
+      "yeah I'm the only other member in the group but pretend it's real. your persona is growth marketer."
+    ],
+    "open_ambiguities": [],
+    "operator_preferences": [],
+    "persistent_decisions": [],
+    "revision_threads": [],
+    "voice_profile": {
+      "avoid_traits": [],
+      "cta_preferences": [],
+      "preferred_traits": [],
+      "style_notes": []
+    }
+  },
+  "kind": "campaign_context",
+  "summary": "Campaign context tracks 7 execution constraints.",
+  "title": "Campaign context profile",
+  "updated_at": "2026-05-31T21:17:23.328413+00:00"
+}

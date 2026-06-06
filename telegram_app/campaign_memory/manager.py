@@ -4,10 +4,41 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from telegram_app.campaign_intent import (
+    AMBIGUITIES_KEY as INTENT_AMBIGUITIES_KEY,
+    BUSINESS_CONTEXT_KEY,
+    CAMPAIGN_CONSTRAINTS_KEY,
+    OFFER_SUMMARY_KEY,
+    TARGET_AUDIENCE_SUMMARY_KEY,
+)
+from telegram_app.campaign_context import (
+    EXECUTION_CONSTRAINTS_KEY,
+    OPEN_AMBIGUITIES_KEY,
+    OPERATOR_PREFERENCES_KEY,
+    PERSISTENT_DECISIONS_KEY,
+    REVISION_STATUS_ACCEPTED,
+    REVISION_STATUS_ACTIVE,
+    REVISION_THREADS_KEY,
+    SCOPE_KEY,
+    STATUS_KEY,
+    SUMMARY_KEY,
+    VOICE_AVOID_TRAITS_KEY,
+    VOICE_CTA_PREFERENCES_KEY,
+    VOICE_PREFERRED_TRAITS_KEY,
+    VOICE_PROFILE_KEY,
+    VOICE_STYLE_NOTES_KEY,
+)
+from telegram_app.conversion_target import (
+    DESTINATION_KIND_KEY as CONVERSION_DESTINATION_KIND_KEY,
+    NORMALIZED_VALUE_KEY as CONVERSION_NORMALIZED_VALUE_KEY,
+    RAW_VALUE_KEY as CONVERSION_RAW_VALUE_KEY,
+    build_conversion_target_summary,
+)
 from telegram_app.intake import (
     CONSTRAINTS_KEY,
     GEOGRAPHY_KEY,
@@ -30,6 +61,12 @@ from telegram_app.models import (
     WorkflowArtifactKind,
     WorkflowSnapshot,
     WorkflowStage,
+)
+from telegram_app.campaign_memory.operational_notes import (
+    CampaignOperationalNotesStore,
+    EXECUTION_LOG_DESTINATION,
+    NEXT_ACTIONS_DESTINATION,
+    OperationalNote,
 )
 
 MESSAGE_HISTORY_KEY = "message_history"
@@ -82,6 +119,9 @@ _DEFAULT_FILE_CONTENT = {
     "agents/account_manager.md": "# Account Manager Notes\n\nAccount-planning notes will accumulate here.\n",
 }
 _ARTIFACT_FILE_NAMES = {
+    WorkflowArtifactKind.CAMPAIGN_INTENT: "artifacts/campaign_intent.json",
+    WorkflowArtifactKind.CAMPAIGN_CONTEXT: "artifacts/campaign_context.json",
+    WorkflowArtifactKind.CONVERSION_TARGET: "artifacts/conversion_target.json",
     WorkflowArtifactKind.CAMPAIGN_BRIEF: "artifacts/campaign_brief.json",
     WorkflowArtifactKind.COMMUNITY_SHORTLIST: "artifacts/community_shortlist.json",
     WorkflowArtifactKind.STRATEGY_PLAYBOOK: "artifacts/strategy_playbook.json",
@@ -93,6 +133,9 @@ _MEMORY_SNIPPET_TOTAL_LIMIT = 6000
 
 class CampaignMemoryManager:
     """Manage the file-backed campaign memory workspace."""
+
+    def __init__(self) -> None:
+        self._operational_notes = CampaignOperationalNotesStore()
 
     def bootstrap_workspace(self, campaign: CampaignRecord) -> CampaignRecord:
         """Create the default workspace structure and normalize tracked file lists."""
@@ -243,7 +286,7 @@ class CampaignMemoryManager:
             },
         )
         return SessionRecord(
-            session_id=f"scheduled::{campaign.campaign_id}::{uuid4()}",
+            session_id=f"scheduled-{campaign.campaign_id}-{uuid4()}",
             operator_id=campaign.operator_id,
             campaign_id=campaign.campaign_id,
             campaign_workspace_path=campaign.workspace_path,
@@ -257,22 +300,49 @@ class CampaignMemoryManager:
             },
         )
 
+    def refresh_campaign_workspace(self, campaign: CampaignRecord) -> None:
+        """Re-render campaign memory from the current durable artifact and note state."""
+        artifacts = self.load_compatibility_artifacts(campaign.workspace_path)
+        snapshot = self._snapshot_from_artifacts(artifacts)
+        session = SessionRecord(
+            session_id=f"memory-refresh-{campaign.campaign_id}-{uuid4()}",
+            operator_id=campaign.operator_id,
+            campaign_id=campaign.campaign_id,
+            campaign_workspace_path=campaign.workspace_path,
+            canonical_memory_files=list(campaign.canonical_files or DEFAULT_CANONICAL_MEMORY_FILES),
+            agent_memory_files=list(campaign.agent_memory_files or DEFAULT_AGENT_MEMORY_FILES),
+            status=SessionStatus.ACTIVE,
+            workflow_state={
+                MESSAGE_HISTORY_KEY: [],
+                WORKFLOW_SNAPSHOT_KEY: snapshot.to_dict(),
+                WORKFLOW_ARTIFACTS_KEY: [artifact.to_dict() for artifact in artifacts],
+            },
+        )
+        self.sync_session(session)
+
     def sync_session(self, session: SessionRecord) -> None:
         """Write campaign memory markdown and compatibility artifacts from session state."""
         if not session.campaign_workspace_path:
             return
 
         workspace = Path(session.campaign_workspace_path)
+        from telegram_app.continuous_ops.storage import load_continuous_ops_state_for_workspace
+
         workspace.mkdir(parents=True, exist_ok=True)
         for directory_name in _DEFAULT_WORKSPACE_DIRECTORIES:
             (workspace / directory_name).mkdir(parents=True, exist_ok=True)
 
         artifacts = self._artifact_map(session)
         snapshot = get_workflow_snapshot(session)
+        intent = artifacts.get(WorkflowArtifactKind.CAMPAIGN_INTENT)
+        campaign_context = artifacts.get(WorkflowArtifactKind.CAMPAIGN_CONTEXT)
+        conversion_target = artifacts.get(WorkflowArtifactKind.CONVERSION_TARGET)
         brief = artifacts.get(WorkflowArtifactKind.CAMPAIGN_BRIEF)
         shortlist = artifacts.get(WorkflowArtifactKind.COMMUNITY_SHORTLIST)
         strategy = artifacts.get(WorkflowArtifactKind.STRATEGY_PLAYBOOK)
         account_plan = artifacts.get(WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN)
+        continuous_ops_state = load_continuous_ops_state_for_workspace(workspace)
+        operational_notes = self._operational_notes.list_notes(workspace)
 
         files_to_ensure = [
             *(session.canonical_memory_files or DEFAULT_CANONICAL_MEMORY_FILES),
@@ -283,14 +353,41 @@ class CampaignMemoryManager:
             self._ensure_file(workspace, relative_path)
 
         rendered_files = {
-            "overview.md": self._render_overview(session, snapshot, brief, shortlist, strategy, account_plan),
-            "operator-intent.md": self._render_operator_intent(session, brief),
+            "overview.md": self._render_overview(
+                session,
+                snapshot,
+                intent,
+                campaign_context,
+                conversion_target,
+                brief,
+                shortlist,
+                strategy,
+                account_plan,
+                continuous_ops_state=continuous_ops_state,
+            ),
+            "operator-intent.md": self._render_operator_intent(
+                session,
+                intent,
+                campaign_context,
+                conversion_target,
+                brief,
+            ),
             "strategy.md": self._render_strategy(session, strategy, shortlist),
             "research-log.md": self._render_research_log(shortlist),
-            "personas.md": self._render_personas(brief, strategy),
+            "personas.md": self._render_personas(brief, strategy, campaign_context),
             "experiments.md": self._render_experiments(strategy),
-            "next-actions.md": self._render_next_actions(snapshot, shortlist, strategy, account_plan),
-            "execution-log.md": self._render_execution_log(account_plan),
+            "next-actions.md": self._render_next_actions(
+                snapshot,
+                shortlist,
+                strategy,
+                account_plan,
+                continuous_ops_state=continuous_ops_state,
+                operational_notes=self._notes_for_destination(operational_notes, NEXT_ACTIONS_DESTINATION),
+            ),
+            "execution-log.md": self._render_execution_log(
+                account_plan,
+                operational_notes=self._notes_for_destination(operational_notes, EXECUTION_LOG_DESTINATION),
+            ),
             "agents/orchestrator.md": self._render_orchestrator_notes(snapshot),
         }
         for relative_path, content in rendered_files.items():
@@ -298,6 +395,28 @@ class CampaignMemoryManager:
 
         self._sync_community_memory(workspace, shortlist)
         self._sync_artifact_views(workspace, artifacts)
+
+    def append_operational_note(
+        self,
+        campaign: CampaignRecord,
+        *,
+        destination: str,
+        line: str,
+        category: str = "",
+        dedupe_key: str = "",
+        recorded_at: datetime | None = None,
+    ) -> OperationalNote | None:
+        """Persist one sparse operational note for later campaign-memory rendering."""
+        if not campaign.workspace_path:
+            return None
+        return self._operational_notes.append_note(
+            campaign.workspace_path,
+            destination=destination,
+            line=line,
+            category=category,
+            dedupe_key=dedupe_key,
+            recorded_at=recorded_at,
+        )
 
     def persist_generated_artifact(
         self,
@@ -360,6 +479,7 @@ class CampaignMemoryManager:
                 data["campaign_id"] = session.campaign_id
             if session.campaign_workspace_path:
                 data["campaign_workspace_path"] = session.campaign_workspace_path
+        self._append_conversion_target_snapshot_data(data, artifact_map)
 
         if WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN in artifact_map:
             artifact = artifact_map[WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN]
@@ -493,14 +613,20 @@ class CampaignMemoryManager:
         self,
         session: SessionRecord,
         snapshot: WorkflowSnapshot,
+        intent: WorkflowArtifact | None,
+        campaign_context: WorkflowArtifact | None,
+        conversion_target: WorkflowArtifact | None,
         brief: WorkflowArtifact | None,
         shortlist: WorkflowArtifact | None,
         strategy: WorkflowArtifact | None,
         account_plan: WorkflowArtifact | None,
+        *,
+        continuous_ops_state,
     ) -> str:
-        objective = self._brief_value(brief, OBJECTIVE_KEY) or snapshot.data.get("objective", "")
-        audience = self._brief_value(brief, TARGET_AUDIENCE_KEY)
+        objective = self._brief_value(brief, OBJECTIVE_KEY) or self._intent_value(intent, BUSINESS_CONTEXT_KEY) or snapshot.data.get("objective", "")
+        audience = self._brief_value(brief, TARGET_AUDIENCE_KEY) or self._intent_value(intent, TARGET_AUDIENCE_SUMMARY_KEY)
         geography = self._brief_value(brief, GEOGRAPHY_KEY)
+        conversion_summary = build_conversion_target_summary(conversion_target.data) if conversion_target is not None else ""
         lines = [
             "# Overview",
             "",
@@ -516,32 +642,70 @@ class CampaignMemoryManager:
             lines.append(f"- Target audience: {audience}")
         if geography:
             lines.append(f"- Geography: {geography}")
+        if conversion_summary and conversion_summary != "Conversion target is not set.":
+            lines.append(f"- Conversion target: {conversion_summary}")
         lines.extend(
             [
                 "",
                 "## Memory Status",
                 "",
+                f"- Campaign intent: {'present' if intent is not None else 'missing'}",
+                f"- Campaign context: {'present' if campaign_context is not None else 'missing'}",
+                f"- Conversion target: {'present' if conversion_target is not None else 'missing'}",
                 f"- Campaign brief: {'present' if brief is not None else 'missing'}",
                 f"- Discovery shortlist: {'present' if shortlist is not None else 'missing'}",
                 f"- Strategy playbook: {'present' if strategy is not None else 'missing'}",
                 f"- Account plan: {'present' if account_plan is not None else 'missing'}",
             ]
         )
+        if continuous_ops_state is not None:
+            lines.extend(
+                [
+                    "",
+                    "## Continuous Operations",
+                    "",
+                    f"- Autonomy mode: {continuous_ops_state.autonomy_mode.value}",
+                    f"- Loop status: {continuous_ops_state.loop_status.value}",
+                f"- Status summary: {continuous_ops_state.status_summary or 'No summary yet.'}",
+                f"- Active schedules: {len(continuous_ops_state.active_schedule_ids)}",
+                f"- Active work types: {', '.join(continuous_ops_state.active_work_types) or 'none'}",
+                f"- Reviewable signals: {continuous_ops_state.reviewable_signal_count}",
+                f"- Commercial summary: {continuous_ops_state.commercial_summary or 'No meaningful commercial traction yet.'}",
+            ]
+        )
+            if continuous_ops_state.high_yield_account_labels:
+                lines.append(
+                    "- High-yield accounts: "
+                    + ", ".join(continuous_ops_state.high_yield_account_labels)
+                )
+            if continuous_ops_state.high_yield_community_labels:
+                lines.append(
+                    "- High-yield communities: "
+                    + ", ".join(continuous_ops_state.high_yield_community_labels)
+                )
+            if continuous_ops_state.blocked_reasons:
+                lines.append(
+                    "- Current blockers: "
+                    + "; ".join(continuous_ops_state.blocked_reasons)
+                )
         return "\n".join(lines).strip() + "\n"
 
     def _render_operator_intent(
         self,
         session: SessionRecord,
+        intent: WorkflowArtifact | None,
+        campaign_context: WorkflowArtifact | None,
+        conversion_target: WorkflowArtifact | None,
         brief: WorkflowArtifact | None,
     ) -> str:
         lines = ["# Operator Intent", ""]
-        if brief is None:
+        if brief is None and intent is None and campaign_context is None and conversion_target is None:
             lines.append("Operator goals and constraints will accumulate here.")
             return "\n".join(lines).strip() + "\n"
 
-        objective = self._brief_value(brief, OBJECTIVE_KEY)
-        audience = self._brief_value(brief, TARGET_AUDIENCE_KEY)
-        offer = self._brief_value(brief, OFFER_KEY)
+        objective = self._brief_value(brief, OBJECTIVE_KEY) or self._intent_value(intent, BUSINESS_CONTEXT_KEY)
+        audience = self._brief_value(brief, TARGET_AUDIENCE_KEY) or self._intent_value(intent, TARGET_AUDIENCE_SUMMARY_KEY)
+        offer = self._brief_value(brief, OFFER_KEY) or self._intent_value(intent, OFFER_SUMMARY_KEY)
         geography = self._brief_value(brief, GEOGRAPHY_KEY)
         language = self._brief_value(brief, LANGUAGE_KEY)
         lines.extend(
@@ -553,10 +717,16 @@ class CampaignMemoryManager:
                 f"- Language: {language or 'n/a'}",
             ]
         )
-        self._append_string_list(lines, "Constraints", brief.data.get(CONSTRAINTS_KEY, []))
-        self._append_string_list(lines, "Success criteria", brief.data.get(SUCCESS_CRITERIA_KEY, []))
-        self._append_string_list(lines, "Notes", brief.data.get(NOTES_KEY, []))
-        self._append_string_list(lines, "Source messages", brief.data.get(SOURCE_MESSAGES_KEY, []))
+        if conversion_target is not None:
+            lines.append(f"- Conversion target: {build_conversion_target_summary(conversion_target.data)}")
+        brief_data = brief.data if brief is not None else {}
+        constraints = brief_data.get(CONSTRAINTS_KEY, []) or self._intent_list(intent, CAMPAIGN_CONSTRAINTS_KEY)
+        self._append_string_list(lines, "Constraints", constraints)
+        self._append_string_list(lines, "Success criteria", brief_data.get(SUCCESS_CRITERIA_KEY, []))
+        self._append_string_list(lines, "Ambiguities", self._intent_list(intent, INTENT_AMBIGUITIES_KEY))
+        self._append_string_list(lines, "Notes", brief_data.get(NOTES_KEY, []))
+        self._append_campaign_context_sections(lines, campaign_context)
+        self._append_string_list(lines, "Source messages", brief_data.get(SOURCE_MESSAGES_KEY, []))
         if not objective and session.latest_operator_message:
             lines.extend(["", "## Latest Operator Message", "", session.latest_operator_message])
         return "\n".join(lines).strip() + "\n"
@@ -625,12 +795,18 @@ class CampaignMemoryManager:
         self,
         brief: WorkflowArtifact | None,
         strategy: WorkflowArtifact | None,
+        campaign_context: WorkflowArtifact | None,
     ) -> str:
         lines = ["# Personas", ""]
         audience = self._brief_value(brief, TARGET_AUDIENCE_KEY)
         language = self._brief_value(brief, LANGUAGE_KEY)
         geography = self._brief_value(brief, GEOGRAPHY_KEY)
-        if not any((audience, language, geography, strategy is not None)):
+        voice_profile = campaign_context.data.get(VOICE_PROFILE_KEY, {}) if campaign_context is not None else {}
+        preferred_traits = self._context_voice_list(voice_profile, VOICE_PREFERRED_TRAITS_KEY)
+        avoid_traits = self._context_voice_list(voice_profile, VOICE_AVOID_TRAITS_KEY)
+        style_notes = self._context_voice_list(voice_profile, VOICE_STYLE_NOTES_KEY)
+        cta_preferences = self._context_voice_list(voice_profile, VOICE_CTA_PREFERENCES_KEY)
+        if not any((audience, language, geography, strategy is not None, preferred_traits, avoid_traits, style_notes, cta_preferences)):
             lines.append("Audience and persona notes will accumulate here.")
             return "\n".join(lines).strip() + "\n"
 
@@ -643,6 +819,10 @@ class CampaignMemoryManager:
         )
         if strategy is not None:
             lines.extend(["", "Use the current strategy playbook to refine tone and persona assumptions."])
+        self._append_string_list(lines, "Preferred voice traits", preferred_traits)
+        self._append_string_list(lines, "Voice traits to avoid", avoid_traits)
+        self._append_string_list(lines, "Voice style notes", style_notes)
+        self._append_string_list(lines, "CTA preferences", cta_preferences)
         return "\n".join(lines).strip() + "\n"
 
     def _render_experiments(self, strategy: WorkflowArtifact | None) -> str:
@@ -673,17 +853,34 @@ class CampaignMemoryManager:
         shortlist: WorkflowArtifact | None,
         strategy: WorkflowArtifact | None,
         account_plan: WorkflowArtifact | None,
+        *,
+        continuous_ops_state,
+        operational_notes: list[OperationalNote],
     ) -> str:
         lines = ["# Next Actions", ""]
         lines.append(f"- Current stage: {snapshot.stage.value}")
         lines.append(f"- Current summary: {snapshot.summary or 'No summary yet.'}")
+        if continuous_ops_state is not None:
+            lines.append(
+                f"- Continuous ops status: {continuous_ops_state.loop_status.value} - "
+                f"{continuous_ops_state.status_summary or 'No summary yet.'}"
+            )
+            if continuous_ops_state.commercial_summary:
+                lines.append(f"- Commercial traction: {continuous_ops_state.commercial_summary}")
+            if continuous_ops_state.blocked_reasons:
+                lines.append(f"- Current blocker: {continuous_ops_state.blocked_reasons[0]}")
         if snapshot.stage is WorkflowStage.DISCOVERY:
             recommended = str(shortlist.data.get("recommended_next_step", "")).strip() if shortlist is not None else ""
             lines.append(f"- Recommended next step: {recommended or 'Refresh or review the discovery shortlist.'}")
         elif snapshot.stage is WorkflowStage.STRATEGY:
             lines.append("- Recommended next step: Review or refine the strategy playbook.")
         elif snapshot.stage is WorkflowStage.ACCOUNT_PLANNING:
-            lines.append("- Recommended next step: Review or refine the account assignment plan.")
+            if "approved" in snapshot.summary.lower():
+                lines.append(
+                    "- Recommended next step: Prepare execution or refresh the account assignment plan when campaign conditions change."
+                )
+            else:
+                lines.append("- Recommended next step: Review or refine the account assignment plan.")
         elif snapshot.stage is WorkflowStage.COMPLETE:
             lines.append("- Recommended next step: Prepare execution or schedule follow-up reviews.")
         else:
@@ -693,20 +890,33 @@ class CampaignMemoryManager:
             lines.append("- Strategy playbook exists and can be used for downstream planning.")
         if account_plan is not None:
             lines.append("- Account assignment plan exists and is ready for operator review.")
+        if operational_notes:
+            lines.extend(["", "## Live Engagement Follow-Ups", ""])
+            for note in sorted(operational_notes, key=lambda item: item.recorded_at, reverse=True):
+                lines.append(f"- {note.recorded_at.isoformat()}: {note.line}")
         return "\n".join(lines).strip() + "\n"
 
-    def _render_execution_log(self, account_plan: WorkflowArtifact | None) -> str:
+    def _render_execution_log(
+        self,
+        account_plan: WorkflowArtifact | None,
+        *,
+        operational_notes: list[OperationalNote],
+    ) -> str:
         lines = ["# Execution Log", ""]
         if account_plan is None:
             lines.append("Execution notes and operational outcomes will accumulate here.")
-            return "\n".join(lines).strip() + "\n"
-        lines.extend(
-            [
-                "## Latest Planning Output",
-                "",
-                account_plan.summary or "Account assignment plan is available for execution follow-up.",
-            ]
-        )
+        else:
+            lines.extend(
+                [
+                    "## Latest Planning Output",
+                    "",
+                    account_plan.summary or "Account assignment plan is available for execution follow-up.",
+                ]
+            )
+        if operational_notes:
+            lines.extend(["", "## Live Engagement Incidents", ""])
+            for note in sorted(operational_notes, key=lambda item: item.recorded_at, reverse=True):
+                lines.append(f"- {note.recorded_at.isoformat()}: {note.line}")
         return "\n".join(lines).strip() + "\n"
 
     def _render_orchestrator_notes(self, snapshot: WorkflowSnapshot) -> str:
@@ -739,6 +949,17 @@ class CampaignMemoryManager:
             return ""
         return str(brief.data.get(key, "")).strip()
 
+    def _intent_value(self, intent: WorkflowArtifact | None, key: str) -> str:
+        if intent is None:
+            return ""
+        return str(intent.data.get(key, "")).strip()
+
+    def _intent_list(self, intent: WorkflowArtifact | None, key: str) -> list[str]:
+        values = intent.data.get(key, []) if intent is not None else []
+        if not isinstance(values, list):
+            return []
+        return [str(value).strip() for value in values if str(value).strip()]
+
     def _append_string_list(self, lines: list[str], label: str, values: Any) -> None:
         normalized_values = [
             str(value).strip()
@@ -750,6 +971,54 @@ class CampaignMemoryManager:
         lines.extend(["", f"## {label}", ""])
         for value in normalized_values:
             lines.append(f"- {value}")
+
+    def _append_campaign_context_sections(
+        self,
+        lines: list[str],
+        campaign_context: WorkflowArtifact | None,
+    ) -> None:
+        if campaign_context is None:
+            return
+        context_data = campaign_context.data if isinstance(campaign_context.data, dict) else {}
+        voice_profile = context_data.get(VOICE_PROFILE_KEY, {})
+        self._append_string_list(lines, "Operator preferences", context_data.get(OPERATOR_PREFERENCES_KEY, []))
+        self._append_string_list(lines, "Execution constraints", context_data.get(EXECUTION_CONSTRAINTS_KEY, []))
+        self._append_string_list(lines, "Persistent decisions", context_data.get(PERSISTENT_DECISIONS_KEY, []))
+        self._append_string_list(lines, "Open ambiguities", context_data.get(OPEN_AMBIGUITIES_KEY, []))
+        self._append_string_list(lines, "Preferred voice traits", self._context_voice_list(voice_profile, VOICE_PREFERRED_TRAITS_KEY))
+        self._append_string_list(lines, "Voice traits to avoid", self._context_voice_list(voice_profile, VOICE_AVOID_TRAITS_KEY))
+        self._append_string_list(lines, "Voice style notes", self._context_voice_list(voice_profile, VOICE_STYLE_NOTES_KEY))
+        self._append_string_list(lines, "CTA preferences", self._context_voice_list(voice_profile, VOICE_CTA_PREFERENCES_KEY))
+        self._append_revision_sections(lines, context_data.get(REVISION_THREADS_KEY, []))
+
+    def _append_revision_sections(self, lines: list[str], revisions: Any) -> None:
+        if not isinstance(revisions, list):
+            return
+        active_lines: list[str] = []
+        accepted_lines: list[str] = []
+        for revision in revisions:
+            if not isinstance(revision, dict):
+                continue
+            scope = str(revision.get(SCOPE_KEY, "")).strip()
+            summary = str(revision.get(SUMMARY_KEY, "")).strip()
+            status = str(revision.get(STATUS_KEY, "")).strip()
+            if not scope or not summary:
+                continue
+            rendered = f"{scope}: {summary}"
+            if status == REVISION_STATUS_ACTIVE:
+                active_lines.append(rendered)
+            elif status == REVISION_STATUS_ACCEPTED:
+                accepted_lines.append(rendered)
+        self._append_string_list(lines, "Active revisions", active_lines[-4:])
+        self._append_string_list(lines, "Accepted revisions", accepted_lines[-4:])
+
+    def _context_voice_list(self, voice_profile: Any, key: str) -> list[str]:
+        if not isinstance(voice_profile, dict):
+            return []
+        values = voice_profile.get(key, [])
+        if not isinstance(values, list):
+            return []
+        return [str(value).strip() for value in values if str(value).strip()]
 
     def _ensure_file(self, workspace: Path, relative_path: str) -> None:
         file_path = workspace / relative_path
@@ -776,3 +1045,25 @@ class CampaignMemoryManager:
         while "--" in cleaned:
             cleaned = cleaned.replace("--", "-")
         return cleaned.strip("-")
+
+    def _append_conversion_target_snapshot_data(
+        self,
+        data: dict[str, Any],
+        artifact_map: dict[WorkflowArtifactKind, WorkflowArtifact],
+    ) -> None:
+        artifact = artifact_map.get(WorkflowArtifactKind.CONVERSION_TARGET)
+        if artifact is None:
+            return
+        payload = artifact.data if isinstance(artifact.data, dict) else {}
+        data["conversion_target_artifact_id"] = artifact.artifact_id
+        data["conversion_target_summary"] = artifact.summary or build_conversion_target_summary(payload)
+        data["conversion_target_kind"] = str(payload.get(CONVERSION_DESTINATION_KIND_KEY, "")).strip()
+        data["conversion_target_normalized_value"] = str(payload.get(CONVERSION_NORMALIZED_VALUE_KEY, "")).strip()
+        data["conversion_target_signal"] = str(payload.get(CONVERSION_RAW_VALUE_KEY, "")).strip()
+
+    def _notes_for_destination(
+        self,
+        notes: list[OperationalNote],
+        destination: str,
+    ) -> list[OperationalNote]:
+        return [note for note in notes if note.destination == destination]

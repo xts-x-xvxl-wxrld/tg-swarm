@@ -1,1 +1,1 @@
-"""Strategy specialist agent package."""
+"""Strategy planning-surface agent package."""

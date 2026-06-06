@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -12,7 +13,13 @@ from telegram_app.campaign_memory import (
     CampaignMemoryManager,
 )
 from telegram_app.json_store import load_json_file, write_json_file
-from telegram_app.models import CampaignRecord, SessionRecord, WorkflowArtifact, WorkflowStage
+from telegram_app.models import (
+    CampaignRecord,
+    CampaignStatus,
+    SessionRecord,
+    WorkflowArtifact,
+    WorkflowStage,
+)
 
 
 class CampaignManager:
@@ -92,6 +99,19 @@ class CampaignManager:
             self._persist(campaign)
             return campaign
 
+    def update_status(self, campaign_id: str, status: CampaignStatus) -> CampaignRecord | None:
+        """Persist a campaign lifecycle status change."""
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                return None
+            if campaign.status is status:
+                return campaign
+            campaign.status = status
+            campaign.touch()
+            self._persist(campaign)
+            return campaign
+
     def hydrate_session(self, session: SessionRecord) -> SessionRecord:
         """Merge campaign-backed memory metadata and compatibility views into a session."""
         if not session.campaign_id:
@@ -130,6 +150,13 @@ class CampaignManager:
             summary=summary,
         )
 
+    def load_compatibility_artifacts(self, campaign_id: str) -> list[WorkflowArtifact]:
+        """Load the current campaign-native workflow artifacts for one campaign."""
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            return []
+        return self._memory_manager.load_compatibility_artifacts(campaign.workspace_path)
+
     def persist_generated_artifact(
         self,
         campaign_id: str,
@@ -148,6 +175,37 @@ class CampaignManager:
             stage=stage,
             summary=summary,
         )
+
+    def append_operational_note(
+        self,
+        campaign_id: str,
+        *,
+        destination: str,
+        line: str,
+        category: str = "",
+        dedupe_key: str = "",
+        recorded_at: datetime | None = None,
+    ) -> None:
+        """Persist one sparse operational note into campaign memory."""
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            return
+        self._memory_manager.append_operational_note(
+            campaign,
+            destination=destination,
+            line=line,
+            category=category,
+            dedupe_key=dedupe_key,
+            recorded_at=recorded_at,
+        )
+        self._memory_manager.refresh_campaign_workspace(campaign)
+
+    def refresh_workspace(self, campaign_id: str) -> None:
+        """Re-render the campaign workspace from its durable state."""
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            return
+        self._memory_manager.refresh_campaign_workspace(campaign)
 
     def _initialize_workspace(self, campaign: CampaignRecord) -> None:
         self._memory_manager.bootstrap_workspace(campaign)

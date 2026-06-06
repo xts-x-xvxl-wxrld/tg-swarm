@@ -1,0 +1,33 @@
+{
+  "approved_claims": [],
+  "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+  "community_tone_guidance": [],
+  "confirmed_areas": [
+    "voice_profile",
+    "dm_reply_posture"
+  ],
+  "escalation_rules": [],
+  "forbidden_claims": [],
+  "operator_preferences": [
+    "Goal: Build a cautious Telegram campaign for BriefBridge, an AI-assisted lead intake workspace for small service agencies. It pulls website forms, shared inbox leads, and Telegram inquiries into one queue and suggests follow-up drafts for human review. We want agency founders and operators with messy inbound lead flow, not ecommerce support teams. Keep the tone practical, low-hype, and emoji-free. In groups, stay value-first and avoid hard selling. Use our private test groups for discovery, strategy, and account planning. The main conversion target is a 20-minute workflow audit call.",
+    "okay, we will only operate in out test groups. https://t.me/swarmtest3 https://t.me/swarmtest2 https://t.me/swarmtestgroup. We want to make group outreach gradually but still proactively, we want to initiate conversations, alsthough do it with caution. Use direct CTA's and convert to your own dms",
+    "let's change the cta from calls to like transfering them into managed accounts dm's"
+  ],
+  "updated_at": "2026-06-01T08:40:43.991459+00:00",
+  "updated_by": "519192084",
+  "voice_profile": {
+    "cta_style": "",
+    "emoji_policy": "",
+    "evidence_style": "",
+    "style_avoid": [
+      "hard close language"
+    ],
+    "style_do": [
+      "frame value around the online service naturally",
+      "answer more directly"
+    ],
+    "tone_descriptors": [
+      "direct"
+    ]
+  }
+}

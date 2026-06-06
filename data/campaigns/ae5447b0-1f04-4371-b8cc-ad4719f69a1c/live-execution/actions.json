@@ -1,0 +1,44 @@
+{
+  "actions": {
+    "8d317ece-529e-4dd7-a226-f6d8f1ba80ec": {
+      "account_id": "account_38671210726",
+      "action_id": "8d317ece-529e-4dd7-a226-f6d8f1ba80ec",
+      "action_type": "send_group_message",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "claim_expires_at": null,
+      "claimed_at": null,
+      "claimed_by": "",
+      "completed_at": null,
+      "conversation_id": "",
+      "created_at": "2026-06-01T08:58:48.588543+00:00",
+      "idempotency_key": "compiled-intent:73aec000-5bb8-4520-b507-45e06ef7728b",
+      "last_error": "",
+      "last_result_summary": "",
+      "max_retries": 3,
+      "next_attempt_at": null,
+      "payload": {
+        "approval_context": {
+          "approval_mode": "operator",
+          "approval_source": "compiled_intent_orchestrator",
+          "approved": true,
+          "approved_by": "519192084",
+          "authorized_action_type": "send_group_message",
+          "authorized_at": "2026-06-01T08:58:48.567385+00:00",
+          "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+          "intent_id": "73aec000-5bb8-4520-b507-45e06ef7728b",
+          "summary": "Day 1 opening message to swarmtestgroup \u2014 soft proof angle with DM CTA."
+        },
+        "chat_id": "3735632929",
+        "text": "Agencies tend to lose the most leads not at acquisition but at the handoff \u2014 between the form, the inbox, and whoever's meant to follow up. Anyone dealing with that? Drop a reply or message me directly."
+      },
+      "retry_count": 0,
+      "source_batch_id": "",
+      "source_plan_artifact_id": "",
+      "source_prepared_item_id": "",
+      "status": "queued",
+      "terminal_failure_reason": "",
+      "updated_at": "2026-06-01T08:58:48.592601+00:00"
+    }
+  },
+  "updated_at": "2026-06-01T08:58:48.592601+00:00"
+}

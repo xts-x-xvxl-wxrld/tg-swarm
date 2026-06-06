@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from .formatting import TELEGRAM_BOT_PARSE_MODE, format_telegram_html
+
 
 @dataclass(slots=True)
 class TelegramBotApiClient:
@@ -27,7 +29,8 @@ class TelegramBotApiClient:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": text,
+            "text": format_telegram_html(text),
+            "parse_mode": TELEGRAM_BOT_PARSE_MODE,
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup

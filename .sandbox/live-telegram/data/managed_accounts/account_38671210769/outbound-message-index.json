@@ -1,0 +1,14 @@
+{
+  "messages": [
+    {
+      "account_id": "account_38671210769",
+      "asset_refs": [],
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "chat_id": "swarmtestgroup",
+      "conversation_id": "",
+      "message_id": "14",
+      "sent_at": "2026-05-31T18:28:27+00:00",
+      "text": "Quick sandbox check from SwarmKit \u2014 testing direct operator-triggered outbound sends."
+    }
+  ]
+}

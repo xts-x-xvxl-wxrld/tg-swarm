@@ -1,0 +1,20 @@
+[Unit]
+Description=tg-swarm scheduler worker
+After=network.target
+
+[Service]
+Type=simple
+User=tg-swarm
+Group=tg-swarm
+WorkingDirectory=/opt/tg-swarm/current
+EnvironmentFile=/etc/tg-swarm.env
+ExecStart=/opt/tg-swarm/.venv/bin/python /opt/tg-swarm/current/server.py --run-scheduler
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/tg-swarm
+
+[Install]
+WantedBy=multi-user.target

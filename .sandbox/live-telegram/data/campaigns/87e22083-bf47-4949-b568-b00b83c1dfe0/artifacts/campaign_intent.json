@@ -1,0 +1,72 @@
+{
+  "artifact_id": "f055443e-3a36-42ad-a1f4-304419cf5aa0",
+  "created_at": "2026-05-31T15:27:57.938722+00:00",
+  "data": {
+    "ambiguities": [],
+    "asset_refs": [],
+    "autonomy_posture": {},
+    "business_context": "Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: \"Single-send channel safety check from SwarmKit \u2014 this should appear once only.\"",
+    "campaign_constraints": [],
+    "conversion_target_signal": {
+      "kind_hint": "",
+      "needs_clarification": false,
+      "raw_value": ""
+    },
+    "geography_hints": [
+      "a private sandbox first",
+      "the autonomous send family",
+      "our sandbox",
+      "parallel",
+      "that case"
+    ],
+    "language_hints": [],
+    "offer_summary": "",
+    "qualification_posture": "",
+    "seed_inputs": {
+      "normalized_candidates": [
+        "https://t.me/tgoutreachtest",
+        "https://t.me/dtomtestchanne",
+        "https://t.me/swarmtestgroup",
+        "@swarmtestgroup",
+        "@dtomtestchanne"
+      ],
+      "raw_entries": [
+        "https://t.me/tgoutreachtest",
+        "https://t.me/DTOMTESTCHANNE",
+        "https://t.me/swarmtestgroup",
+        "@swarmtestgroup",
+        "@DTOMTESTCHANNE"
+      ],
+      "unresolved_mentions": []
+    },
+    "source_message_refs": [
+      "168",
+      "170",
+      "172",
+      "174",
+      "176",
+      "178",
+      "180",
+      "182",
+      "184",
+      "186",
+      "188",
+      "190",
+      "192",
+      "194",
+      "196",
+      "198",
+      "200",
+      "202",
+      "204",
+      "206",
+      "208",
+      "210"
+    ],
+    "target_audience": "the other account"
+  },
+  "kind": "campaign_intent",
+  "summary": "Campaign focus: Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: \"Single-send channel safety check from SwarmKit \u2014 this should appear once only.\". Audience: the other account. Recognized 5 seed community candidates.",
+  "title": "Campaign intent package",
+  "updated_at": "2026-05-31T20:50:26.591477+00:00"
+}

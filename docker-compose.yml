@@ -1,5 +1,5 @@
 services:
-  openswarm:
+  tg-swarm:
     build: .
     ports:
       - "8080:8080"
@@ -7,4 +7,3 @@ services:
       - .env
     volumes:
       - ./mnt:/app/mnt
-      - ./uploads:/app/uploads

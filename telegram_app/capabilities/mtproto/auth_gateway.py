@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 from telegram_app.auth.models import AuthGatewayResult
 
 from .client import TelethonClientWrapper
 from .error_classifier import classify_mtproto_exception
+
+logger = logging.getLogger(__name__)
 
 
 class TelethonAuthGateway:
@@ -18,6 +23,14 @@ class TelethonAuthGateway:
         try:
             result = self._client_wrapper.request_login_code(account_id, phone)
         except Exception as exc:
+            logger.exception(
+                "Telethon request_login_code failed for %s phone=%s exc_type=%s PATH_present=%s Path_present=%s",
+                account_id,
+                phone,
+                exc.__class__.__name__,
+                "PATH" in os.environ,
+                "Path" in os.environ,
+            )
             error = classify_mtproto_exception(exc, action="requesting a login code")
             return AuthGatewayResult(
                 success=False,

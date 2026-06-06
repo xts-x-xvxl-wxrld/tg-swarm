@@ -1,1 +1,1 @@
-"""Discovery specialist agent package."""
+"""Discovery planning-surface agent package."""

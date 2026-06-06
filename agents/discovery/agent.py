@@ -1,10 +1,9 @@
-"""Discovery specialist agent for Telegram community shortlist generation."""
+"""Discovery planning-surface agent for Telegram community shortlist generation."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -12,19 +11,27 @@ from uuid import uuid4
 
 import anthropic
 
+from telegram_app.agent_runtime import AgentRuntimeBroker
 from telegram_app.approvals import ApprovalManager
 from telegram_app.campaign_memory import CampaignMemoryManager
-from telegram_app.capabilities import CommunityCapability, MessagingCapability
+from telegram_app.capabilities import (
+    AccountCapability,
+    CommunityCapability,
+    MembershipCapability,
+    MessagingCapability,
+)
 from telegram_app.discovery import (
     parse_discovery_shortlist,
     persist_discovery_shortlist,
     strip_discovery_json_block,
 )
 from telegram_app.intake import get_campaign_brief_artifact
+from telegram_app.llm import TelegramCapabilityToolbox, resolve_model
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import ApprovalRecord, SessionRecord, WorkflowArtifact, WorkflowArtifactKind
 from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.sessions import SessionManager
+from telegram_app.workflow_validation import parse_output_proposal_list
 
 logger = logging.getLogger(__name__)
 
@@ -75,33 +82,37 @@ def _load_prompt(name: str) -> str:
     return (REPO_ROOT / "prompts" / name).read_text(encoding="utf-8")
 
 
-def _resolve_model() -> str:
-    model = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6").strip()
-    if "/" in model:
-        model = model.split("/", 1)[1]
-    if not model.startswith("claude-"):
-        model = "claude-sonnet-4-6"
-    return model
-
-
 class DiscoveryAgent:
-    """Specialist agent for Telegram community discovery and shortlist generation."""
+    """Planning-surface agent for Telegram community discovery and shortlist generation."""
 
     def __init__(
         self,
         session_manager: SessionManager | None = None,
         approval_manager: ApprovalManager | None = None,
+        account_capability: AccountCapability | None = None,
         community_capability: CommunityCapability | None = None,
+        membership_capability: MembershipCapability | None = None,
         messaging_capability: MessagingCapability | None = None,
         monitor: RuntimeEventLogger | None = None,
+        runtime_broker: AgentRuntimeBroker | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._approval_manager = approval_manager
+        self._account_capability = account_capability
         self._community_capability = community_capability
+        self._membership_capability = membership_capability
         self._messaging_capability = messaging_capability
         self._monitor = monitor or NullRuntimeEventLogger()
+        self._runtime_broker = runtime_broker
         self._memory_manager = CampaignMemoryManager()
         self._client = anthropic.Anthropic()
+        self._toolbox = TelegramCapabilityToolbox(
+            account_capability=account_capability,
+            community_capability=community_capability,
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+        )
+        self.last_proposal_payloads: list[dict[str, Any]] = []
 
     def run(
         self,
@@ -117,7 +128,16 @@ class DiscoveryAgent:
         system = [
             {"type": "text", "text": _load_prompt("discovery.md")},
             {"type": "text", "text": _load_prompt("shared_runtime.md")},
-            {"type": "text", "text": build_runtime_context(session, pending_approval=None, discovery_mode=True)},
+            {
+                "type": "text",
+                "text": build_runtime_context(
+                    session,
+                    pending_approval=None,
+                    discovery_mode=True,
+                    work_type="discovery",
+                    agent_runtime_broker=self._runtime_broker,
+                ),
+            },
         ]
         specialist_memory = self._memory_manager.load_agent_prompt_memory(session, "discovery")
         if specialist_memory:
@@ -131,7 +151,7 @@ class DiscoveryAgent:
         user_content, brief_search_diagnostics = self._build_user_content(session, operator_message)
         messages = [{"role": "user", "content": user_content}]
 
-        model = _resolve_model()
+        model = resolve_model()
         logger.info("DiscoveryAgent calling Anthropic API model=%s", model)
         self._monitor.record_event(
             component="discovery_agent",
@@ -146,7 +166,8 @@ class DiscoveryAgent:
         )
 
         try:
-            api_response = self._client.messages.create(
+            completion = self._toolbox.run_completion(
+                client=self._client,
                 model=model,
                 max_tokens=4096,
                 system=system,
@@ -162,9 +183,8 @@ class DiscoveryAgent:
             )
             raise
 
-        final_output = "".join(
-            block.text for block in api_response.content if hasattr(block, "text")
-        ).strip()
+        final_output = completion.final_output
+        self.last_proposal_payloads = parse_output_proposal_list(final_output) or []
 
         artifact: WorkflowArtifact | None = None
         approval: ApprovalRecord | None = None
@@ -220,6 +240,8 @@ class DiscoveryAgent:
                 "artifact_id": artifact.artifact_id if artifact is not None else "",
                 "approval_id": approval.approval_id if approval is not None else "",
                 "live_summary": live_summary,
+                "tool_call_count": completion.tool_call_count,
+                "tool_names": completion.tool_names,
             },
         )
         return operator_text, artifact, approval
@@ -331,10 +353,13 @@ class DiscoveryAgent:
         offer = search_inputs["offer"]
         objective_focus = search_inputs["objective_focus"]
         core_phrase = search_inputs["core_phrase"]
+        seed_target_groups = self._seed_target_group_queries(session)
 
         specs: list[dict[str, str]] = []
         self._append_query_spec(specs, "core_with_geography", f"{core_phrase} {geography}")
         self._append_query_spec(specs, "core", core_phrase)
+        for seed_target_group in seed_target_groups:
+            self._append_query_spec(specs, "seed_target_group", seed_target_group)
 
         for variant in self._build_related_phrase_variants(core_phrase, objective_focus)[:DISCOVERY_PRIMARY_RELATED_VARIANT_COUNT]:
             self._append_query_spec(specs, "related_with_geography", f"{variant} {geography}")
@@ -351,6 +376,21 @@ class DiscoveryAgent:
             self._append_query_spec(specs, "offer", f"{core_phrase} {offer}")
 
         return specs[:DISCOVERY_QUERY_BUDGET]
+
+    def _seed_target_group_queries(self, session: SessionRecord) -> list[str]:
+        campaign_brief = get_campaign_brief_artifact(session)
+        if campaign_brief is None:
+            return []
+        raw_seed_groups = campaign_brief.data.get("seed_target_groups", [])
+        if not isinstance(raw_seed_groups, list):
+            return []
+
+        queries: list[str] = []
+        for raw_seed_group in raw_seed_groups:
+            normalized_seed_group = self._normalize_seed_target_group(raw_seed_group)
+            if normalized_seed_group:
+                self._append_query(queries, normalized_seed_group)
+        return queries
 
     def _run_brief_searches(
         self,
@@ -1039,6 +1079,16 @@ class DiscoveryAgent:
 
     def _normalize_query_text(self, value: Any) -> str:
         return " ".join(str(value or "").strip().split())
+
+    def _normalize_seed_target_group(self, value: Any) -> str:
+        normalized = self._normalize_query_text(value)
+        if normalized.startswith("https://t.me/"):
+            return "@" + normalized.removeprefix("https://t.me/").strip("/")
+        if normalized.startswith("http://t.me/"):
+            return "@" + normalized.removeprefix("http://t.me/").strip("/")
+        if normalized.startswith("t.me/"):
+            return "@" + normalized.removeprefix("t.me/").strip("/")
+        return normalized
 
     def _build_related_phrase_variants(self, core_phrase: str, objective_focus: str) -> list[str]:
         variants: list[str] = []

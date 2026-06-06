@@ -1,0 +1,32 @@
+{
+  "active_schedule_ids": [
+    "4fa9bbab-aaf1-43ad-a355-ff79edb3d8b1"
+  ],
+  "active_work_types": [],
+  "autonomy_mode": "continuous",
+  "blocked_reasons": [],
+  "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+  "commercial_summary": "No meaningful commercial traction has been persisted yet.",
+  "conversion_ready_thread_count": 0,
+  "high_yield_account_labels": [],
+  "high_yield_community_labels": [],
+  "highest_signal_severity": "",
+  "last_refreshed_at": "2026-06-01T09:02:49.566318+00:00",
+  "latest_observation_attention": "",
+  "latest_observation_next_step": "",
+  "latest_observation_summary": "",
+  "loop_status": "running",
+  "next_scheduled_run_at": "2026-06-02T09:02:03.917413+00:00",
+  "objection_heavy_thread_count": 0,
+  "operator_attention_required": false,
+  "paused_schedule_ids": [
+    "c93a2839-b6cc-477e-b657-e08b9903a0f7"
+  ],
+  "promising_active_thread_count": 0,
+  "review_pending_work_types": [],
+  "reviewable_signal_count": 0,
+  "stale_promising_thread_count": 0,
+  "status_summary": "Continuous campaign loop is active with 1 schedule(s), 0 open work item(s), and 0 reviewable signal(s).",
+  "unresolved_high_opportunity_thread_count": 0,
+  "unresolved_signal_count": 0
+}

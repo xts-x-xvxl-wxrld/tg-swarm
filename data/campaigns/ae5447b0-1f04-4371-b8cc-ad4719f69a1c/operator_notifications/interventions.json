@@ -1,0 +1,25 @@
+{
+  "interventions": [
+    {
+      "acknowledged_at": "",
+      "body": "Continuous autonomy is enabled, but no recurring schedules or open work items are driving the campaign yet.",
+      "campaign_id": "ae5447b0-1f04-4371-b8cc-ad4719f69a1c",
+      "created_at": "2026-06-01T08:18:46.476191+00:00",
+      "dedupe_key": "campaign-loop-blocked",
+      "delivery_count": 0,
+      "first_detected_at": "2026-06-01T08:18:46.476191+00:00",
+      "intervention_id": "fc25068e-2303-40c4-b3e3-9d7b80a252db",
+      "kind": "campaign_loop_blocked",
+      "last_changed_at": "2026-06-01T08:40:43.934913+00:00",
+      "last_delivered_at": "",
+      "last_detected_at": "2026-06-01T08:40:43.934913+00:00",
+      "recovery_hint": "Create a recurring schedule or open a new work item so the campaign has a bounded next move again.",
+      "related_refs": [],
+      "resolved_at": "2026-06-01T08:40:44.039040+00:00",
+      "severity": "high",
+      "status": "resolved",
+      "title": "Campaign loop is blocked",
+      "updated_at": "2026-06-01T08:40:44.056764+00:00"
+    }
+  ]
+}

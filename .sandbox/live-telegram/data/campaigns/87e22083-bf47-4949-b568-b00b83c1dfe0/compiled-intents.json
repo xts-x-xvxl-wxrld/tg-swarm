@@ -1,0 +1,367 @@
+{
+  "compiled_intents": [
+    {
+      "accepted_at": "2026-05-31T15:54:10.401430+00:00",
+      "ambiguity": "",
+      "application_result": "Queued low-risk action `join_community` for `account_38671210769`.",
+      "applied_at": "2026-05-31T15:54:10.456870+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.97,
+      "created_at": "2026-05-31T15:54:10.397865+00:00",
+      "grounding_refs": [
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760"
+      ],
+      "intent_id": "2c384eb3-1fa4-4024-af40-e45bdbcb5f19",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "join_community",
+        "community_id": "swarmtestgroup",
+        "conversation_id": "b38822de-8ebf-4b35-85bb-322e95f22760"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Join @swarmtestgroup with account @maximovkaxxx (account_38671210769).",
+      "updated_at": "2026-05-31T15:54:10.456892+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T15:54:10.500675+00:00",
+      "ambiguity": "",
+      "application_result": "Queued low-risk action `join_community` for `account_38671210726`.",
+      "applied_at": "2026-05-31T15:54:10.558469+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.97,
+      "created_at": "2026-05-31T15:54:10.397905+00:00",
+      "grounding_refs": [
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760"
+      ],
+      "intent_id": "59af7d7a-c4e5-44c1-b2c0-868ebd2ee337",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210726",
+        "action_type": "join_community",
+        "community_id": "DTOMTESTCHANNE",
+        "conversation_id": "b38822de-8ebf-4b35-85bb-322e95f22760"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Join @DTOMTESTCHANNE with account @dxnxlxvxch (account_38671210726).",
+      "updated_at": "2026-05-31T15:54:10.558488+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T16:18:23.640378+00:00",
+      "ambiguity": "",
+      "application_result": "",
+      "applied_at": null,
+      "blocked_at": "2026-05-31T16:18:23.656536+00:00",
+      "blocked_reason": "Only join, mark-read, and leave-dialog low-risk actions are supported.",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.95,
+      "created_at": "2026-05-31T16:18:23.636478+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "427c24c9-de56-4866-be94-ff2d1f92b406",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "send_message",
+        "chat_id": "swarmtestgroup",
+        "conversation_id": "b38822de-8ebf-4b35-85bb-322e95f22760",
+        "message": "Hey everyone \ud83d\udc4b I've been building with **SwarmKit** lately \u2014 a Telegram-native outreach SDK that lets you run coordinated multi-account campaigns with full audit trails and operator controls. Still early but it's already handling real workflows. Happy to share more if anyone's exploring this space."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "blocked",
+      "summary": "Send SwarmKit intro message to @swarmtestgroup as @maximovkaxxx.",
+      "updated_at": "2026-05-31T16:18:23.656550+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T16:18:23.694140+00:00",
+      "ambiguity": "",
+      "application_result": "",
+      "applied_at": null,
+      "blocked_at": "2026-05-31T16:18:23.711056+00:00",
+      "blocked_reason": "Only join, mark-read, and leave-dialog low-risk actions are supported.",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.95,
+      "created_at": "2026-05-31T16:18:23.636503+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "5f02662c-8d43-46a7-9bdd-9f49d9ef66f5",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210726",
+        "action_type": "send_message",
+        "chat_id": "DTOMTESTCHANNE",
+        "conversation_id": "b38822de-8ebf-4b35-85bb-322e95f22760",
+        "message": "Hey folks \ud83d\udc4b Just wanted to share something we've been working on \u2014 **SwarmKit**, a developer SDK for Telegram-native outreach automation. Think multi-account coordination, warmup management, and deterministic send policy, all in one runtime. Anyone here experimenting with Telegram bots or growth tooling?"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "blocked",
+      "summary": "Send SwarmKit intro message to @DTOMTESTCHANNE as @dxnxlxvxch.",
+      "updated_at": "2026-05-31T16:18:23.711072+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T16:27:09.230060+00:00",
+      "ambiguity": "",
+      "application_result": "Updated the live reply voice for campaign `87e22083-bf47-4949-b568-b00b83c1dfe0`: direct.",
+      "applied_at": "2026-05-31T16:27:09.367860+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 1.0,
+      "created_at": "2026-05-31T16:27:09.211073+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978",
+        "artifact:3fe270a5-7b5a-44cf-8ce5-2b36ec8311fa"
+      ],
+      "intent_id": "ad649057-daeb-4064-99eb-19fdd29c8109",
+      "kind": "campaign_control.update_voice",
+      "payload": {
+        "operator_id": "519192084",
+        "raw_text": "Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies.\n\nImportant distinction:\n- Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog\n- So if you try to send by using the low-risk direct-action path, that is still unsupported\n- But if you are planning or executing autonomous outreach inside the sandbox, group messages can now be queued/executed through the proper send path\n\nFor this sandbox, you may use autonomous group outreach in our test spaces.",
+        "scope": "campaign",
+        "style_do": [
+          "answer more directly"
+        ],
+        "tone_descriptors": [
+          "direct"
+        ]
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "state_mutation",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Update the campaign live-reply voice guidance.",
+      "updated_at": "2026-05-31T16:27:09.367873+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T17:14:08.278380+00:00",
+      "ambiguity": "",
+      "application_result": "",
+      "applied_at": null,
+      "blocked_at": "2026-05-31T17:14:08.318690+00:00",
+      "blocked_reason": "Blocked a conversation-linked action because the conversation could not be loaded.",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.98,
+      "created_at": "2026-05-31T17:14:08.272119+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "0424a584-01cf-478d-9df2-6d6db36ab1a4",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "send_group_message",
+        "chat_id": "swarmtestgroup",
+        "conversation_id": "b38822de-8ebf-4b35-85bb-322e95f22760",
+        "operator_id": "519192084",
+        "text": "Quick sandbox check from SwarmKit \u2014 testing direct operator-triggered outbound sends."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "blocked",
+      "summary": "Send operator-specified sandbox check message to @swarmtestgroup as @maximovkaxxx.",
+      "updated_at": "2026-05-31T17:14:08.318703+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T17:59:13.582953+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210769`.",
+      "applied_at": "2026-05-31T17:59:13.652071+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.98,
+      "created_at": "2026-05-31T17:59:13.577426+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "9e9d4a79-af70-46e2-9a4b-739492703df0",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "send_group_message",
+        "chat_id": "3735632929",
+        "operator_id": "519192084",
+        "text": "Quick sandbox check from SwarmKit \u2014 testing direct operator-triggered outbound sends."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Send operator-specified sandbox check message to @swarmtestgroup as @maximovkaxxx.",
+      "updated_at": "2026-05-31T17:59:13.652089+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T18:10:41.238724+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210769`.",
+      "applied_at": "2026-05-31T18:10:41.284524+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.98,
+      "created_at": "2026-05-31T18:10:41.235439+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "88d43948-f522-4d06-b31a-19ff79e060f3",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "send_group_message",
+        "chat_id": "swarmtestgroup",
+        "operator_id": "519192084",
+        "text": "Quick sandbox check from SwarmKit \u2014 testing direct operator-triggered outbound sends."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Retry operator-specified sandbox check message to @swarmtestgroup as @maximovkaxxx.",
+      "updated_at": "2026-05-31T18:10:41.284538+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T18:15:06.940492+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210726`.",
+      "applied_at": "2026-05-31T18:15:06.993051+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.97,
+      "created_at": "2026-05-31T18:15:06.936984+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "4c356cb2-8346-47e1-96d4-3ee52f831b3c",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210726",
+        "action_type": "send_group_message",
+        "chat_id": "DTOMTESTCHANNE",
+        "operator_id": "519192084",
+        "text": "Hey \u2014 just running a quick runtime test here. Nothing to see, carry on! \ud83d\udee0\ufe0f"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Send sandbox test message to @DTOMTESTCHANNE as account_38671210726.",
+      "updated_at": "2026-05-31T18:15:06.993073+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T20:46:09.374387+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210769`.",
+      "applied_at": "2026-05-31T20:46:09.436015+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.99,
+      "created_at": "2026-05-31T20:46:09.366697+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "e8caad5f-2673-438e-8445-c21294cac3b7",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "send_group_message",
+        "chat_id": "swarmtestgroup",
+        "operator_id": "519192084",
+        "text": "Single-send safety check from SwarmKit \u2014 this message should appear once only."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Send single-send safety check message to @swarmtestgroup as account_38671210769.",
+      "updated_at": "2026-05-31T20:46:09.436029+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T20:50:30.975460+00:00",
+      "ambiguity": "",
+      "application_result": "Queued operator-approved send `send_group_message` for `account_38671210726`.",
+      "applied_at": "2026-05-31T20:50:31.043983+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+      "confidence": 0.99,
+      "created_at": "2026-05-31T20:50:30.971470+00:00",
+      "grounding_refs": [
+        "session:b38822de-8ebf-4b35-85bb-322e95f22760",
+        "campaign:87e22083-bf47-4949-b568-b00b83c1dfe0",
+        "workflow_stage:intake",
+        "artifact:5f9f2aec-c9b1-4e8a-a7de-c5885a9d3978"
+      ],
+      "intent_id": "e0d6b46e-0d41-433c-a13b-fd0c9e0981ad",
+      "kind": "live_action.enqueue_operator_send",
+      "payload": {
+        "account_id": "account_38671210726",
+        "action_type": "send_group_message",
+        "chat_id": "DTOMTESTCHANNE",
+        "operator_id": "519192084",
+        "text": "Single-send channel safety check from SwarmKit \u2014 this should appear once only."
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Send single-send channel safety check message to @DTOMTESTCHANNE as account_38671210726.",
+      "updated_at": "2026-05-31T20:50:31.044000+00:00"
+    }
+  ]
+}

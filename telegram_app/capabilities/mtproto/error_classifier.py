@@ -90,10 +90,42 @@ def classify_mtproto_exception(exc: Exception, *, action: str) -> MtprotoErrorDe
             code="community_private",
             message="That community is private or inaccessible to this account.",
         )
+    if class_name == "PeerIdInvalidError":
+        return MtprotoErrorDetails(
+            code="peer_invalid",
+            message="Telegram could not resolve that chat or peer for the requested action.",
+        )
+    if class_name == "MessageIdInvalidError":
+        return MtprotoErrorDetails(
+            code="message_not_found",
+            message="Telegram could not find the target message for the requested action.",
+        )
+    if class_name == "UserNotParticipantError":
+        return MtprotoErrorDetails(
+            code="already_not_participating",
+            message="This account is already no longer participating in that dialog.",
+            already_satisfied=True,
+        )
     if class_name == "InviteRequestSentError":
         return MtprotoErrorDetails(
             code="join_request_sent",
             message="Telegram accepted the join request, but the community still requires approval.",
+        )
+    if class_name == "ChannelJoinDeferredError":
+        return MtprotoErrorDetails(
+            code="channel_join_deferred",
+            message=str(exc) or "Broadcast channel joins are deferred in this version.",
+        )
+    if class_name == "ChannelSendDeferredError":
+        return MtprotoErrorDetails(
+            code="channel_send_deferred",
+            message=str(exc) or "Broadcast channel sends are deferred in this version.",
+        )
+    if class_name == "ChatAdminRequiredError":
+        return MtprotoErrorDetails(
+            code="write_forbidden",
+            message="Telegram requires additional permissions for that action in this chat.",
+            health="flagged",
         )
     if class_name in _BANNED_ERROR_NAMES:
         return MtprotoErrorDetails(
@@ -118,4 +150,3 @@ def classify_mtproto_exception(exc: Exception, *, action: str) -> MtprotoErrorDe
         code="unexpected_error",
         message=f"Telegram {action} failed: {exc}",
     )
-

@@ -1,0 +1,59 @@
+{
+  "actions": {
+    "32f16dd0-f0d9-432e-808b-80931f38fbec": {
+      "account_id": "account_38671210769",
+      "action_id": "32f16dd0-f0d9-432e-808b-80931f38fbec",
+      "action_type": "join_community",
+      "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+      "claim_expires_at": null,
+      "claimed_at": null,
+      "claimed_by": "",
+      "completed_at": null,
+      "conversation_id": "",
+      "created_at": "2026-05-31T21:11:55.559892+00:00",
+      "idempotency_key": "d175f558a40b20689a1720b19a5bab8a9f6d8a8fe958492352f290156f75378c",
+      "last_error": "Telegram account account_38671210769 has reached the 2 joins per 24-hour warmup limit for day 1.",
+      "last_result_summary": "Telegram account account_38671210769 has reached the 2 joins per 24-hour warmup limit for day 1.",
+      "max_retries": 3,
+      "next_attempt_at": "2026-05-31T23:12:10.564205+00:00",
+      "payload": {
+        "community_id": "swarmtest3"
+      },
+      "retry_count": 2,
+      "source_batch_id": "",
+      "source_plan_artifact_id": "",
+      "source_prepared_item_id": "",
+      "status": "retry_wait",
+      "terminal_failure_reason": "",
+      "updated_at": "2026-05-31T22:12:10.587467+00:00"
+    },
+    "fb12d552-706b-4b2e-b621-65cf3bd4e3f0": {
+      "account_id": "account_38671210769",
+      "action_id": "fb12d552-706b-4b2e-b621-65cf3bd4e3f0",
+      "action_type": "join_community",
+      "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+      "claim_expires_at": null,
+      "claimed_at": null,
+      "claimed_by": "",
+      "completed_at": "2026-05-31T21:12:01.223226+00:00",
+      "conversation_id": "",
+      "created_at": "2026-05-31T21:11:55.461653+00:00",
+      "idempotency_key": "742e5b25dffc82db46730e39142c2ee0d666ff7d45556c35f2eef968a0c914ee",
+      "last_error": "",
+      "last_result_summary": "Joined swarmtest2 successfully.",
+      "max_retries": 3,
+      "next_attempt_at": null,
+      "payload": {
+        "community_id": "swarmtest2"
+      },
+      "retry_count": 0,
+      "source_batch_id": "",
+      "source_plan_artifact_id": "",
+      "source_prepared_item_id": "",
+      "status": "succeeded",
+      "terminal_failure_reason": "",
+      "updated_at": "2026-05-31T21:12:01.246306+00:00"
+    }
+  },
+  "updated_at": "2026-05-31T23:02:44.819595+00:00"
+}

@@ -1,1 +1,1 @@
-"""Account manager specialist agent package."""
+"""Account-planning surface agent package."""

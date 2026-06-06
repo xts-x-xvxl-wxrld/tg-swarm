@@ -1,0 +1,224 @@
+{
+  "agent_memory_files": [
+    "agents/orchestrator.md",
+    "agents/discovery.md",
+    "agents/strategy.md",
+    "agents/account_manager.md"
+  ],
+  "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+  "campaign_workspace_path": "C:\\Users\\ravil\\OneDrive\\Desktop\\tg-swarm\\.sandbox\\live-telegram\\data\\campaigns\\b5cba011-957e-4479-a2c9-bbfba233202c",
+  "canonical_memory_files": [
+    "overview.md",
+    "operator-intent.md",
+    "strategy.md",
+    "research-log.md",
+    "personas.md",
+    "experiments.md",
+    "next-actions.md",
+    "execution-log.md"
+  ],
+  "created_at": "2026-05-31T21:09:34.456422+00:00",
+  "latest_operator_message": "I like 3 as well",
+  "linked_entity_ids": {
+    "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+    "campaign_workspace_path": "C:\\Users\\ravil\\OneDrive\\Desktop\\tg-swarm\\.sandbox\\live-telegram\\data\\campaigns\\b5cba011-957e-4479-a2c9-bbfba233202c"
+  },
+  "operator_id": "519192084",
+  "pending_approval_id": null,
+  "session_id": "24c54d23-f999-48fa-892a-ea0750366ab0",
+  "status": "active",
+  "updated_at": "2026-05-31T21:17:30.218530+00:00",
+  "workflow_state": {
+    "campaign_setup_state": {
+      "asset_refs": [],
+      "audience": "",
+      "constraints": [],
+      "geography": "",
+      "goal": "I like 3 as well",
+      "last_missing_question_hint": "Who is the main audience?",
+      "missing_fields": [
+        "audience"
+      ],
+      "offer_context": "",
+      "readiness_status": "collecting_inputs",
+      "seed_target_groups": [
+        "https://t.me/swarmtest2",
+        "https://t.me/swarmtest3",
+        "@swarmtestgroup",
+        "@wazelaver"
+      ],
+      "success_intent": [
+        "1. classify targets correctly"
+      ]
+    },
+    "message_history": [
+      {
+        "role": "operator",
+        "text": "Goal: run a realistic end-to-end outbound Telegram sandbox campaign inside our owned test groups only.\n\nScope for this test:\n- Use only our test groups/supergroups, not channels\n- You may join eligible groups, read them, post one outbound opener, handle inbound group replies, and reply in DMs only after the other person messages first\n- Do not use or target broadcast channels\n- Do not expand outside our test spaces\n- Treat this as a live business validation of discovery, planning, first outreach, engagement handling, and operator reporting\n\nSeed test spaces:\n@swarmtestgroup\nhttps://t.me/swarmtest2\nhttps://t.me/swarmtest3\n\nSuccess criteria:\n1. classify targets correctly\n2. queue only allowed actions\n3. send one clean outbound opener into a valid test group\n4. react sensibly to inbound replies\n5. report exact outcomes, blockers, and next steps"
+      },
+      {
+        "content": "I have the campaign brief and seed groups locked in. One missing field before I can close setup and move to discovery:\n\n**Who is the target audience for this campaign?**\n\nSince this is a sandbox validation, the audience can be lightweight \u2014 for example:\n- \"sandbox test participants\" or \"internal testers\"\n- A simulated persona like \"early-stage SaaS founders\" or \"growth marketers\"\n- Or simply \"anyone in the test groups\" if you want to skip persona targeting for now\n\nWhat would you like me to use?",
+        "role": "assistant"
+      },
+      {
+        "role": "operator",
+        "text": "yeah I'm the only other member in the group but pretend it's real. your persona is growth marketer."
+      },
+      {
+        "content": "Transient read error on the group chat \u2014 I'll proceed with what I have. Here's the full discovery picture and my plan:\n\n---\n\n## \ud83d\udd0d Discovery Summary\n\n| Group | Type | Members | Account Status |\n|---|---|---|---|\n| `@swarmtestgroup` | supergroup | 2 | \u2705 Already a member |\n| `@swarmtest2` | supergroup | 1 | \u274c Not a member |\n| `@swarmtest3` | supergroup | 1 | \u274c Not a member |\n\n**Classification:**\n- `@swarmtestgroup` \u2192 **Primary target.** Only group with 2 members, account already inside. Best and only valid venue for the outbound opener right now.\n- `@swarmtest2` / `@swarmtest3` \u2192 **Secondary targets.** Solo groups, need to join first. Valid for warmup but opener should go to the primary group first.\n\n---\n\n## \ud83d\udccb Proposed Action Queue\n\n**Step 1 \u2014 Join swarmtest2 and swarmtest3** (low-risk, allowed under scope)\n**Step 2 \u2014 Send one outbound opener into `@swarmtestgroup`** (primary target, already a member)\n\nFor the opener, I'll write it as a growth marketer making a genuine first post \u2014 not spammy, conversational, curiosity-driven. Something like:\n\n> *\"Hey everyone \ud83d\udc4b Just joined to connect with folks thinking about growth and distribution. Anyone here working on early traction or testing new acquisition channels? Would love to swap notes.\"*\n\n---\n\nDoes this opener tone work for you, or would you like to adjust it before I queue the send? I'll also go ahead and queue the two joins in parallel \u2014 those are non-send and can go right now.\n\n```\nCOMPILED_PROPOSALS_JSON\n```\n\n```json\n[\n  {\n    \"kind\": \"live_action.enqueue_low_risk\",\n    \"summary\": \"Join @swarmtest2 \u2014 not yet a member, eligible supergroup within sandbox scope.\",\n    \"payload\": {\n      \"account_id\": \"account_38671210769\",\n      \"action_type\": \"join_community\",\n      \"community_id\": \"swarmtest2\"\n    },\n    \"confidence\": 0.97\n  },\n  {\n    \"kind\": \"live_action.enqueue_low_risk\",\n    \"summary\": \"Join @swarmtest3 \u2014 not yet a member, eligible supergroup within sandbox scope.\",\n    \"payload\": {\n      \"account_id\": \"account_38671210769\",\n      \"action_type\": \"join_community\",\n      \"community_id\": \"swarmtest3\"\n    },\n    \"confidence\": 0.97\n  }\n]\n```",
+        "role": "assistant"
+      },
+      {
+        "role": "assistant",
+        "text": "Transient read error on the group chat \u2014 I'll proceed with what I have. Here's the full discovery picture and my plan:\n\n---\n\n## \ud83d\udd0d Discovery Summary\n\n| Group | Type | Members | Account Status |\n|---|---|---|---|\n| `@swarmtestgroup` | supergroup | 2 | \u2705 Already a member |\n| `@swarmtest2` | supergroup | 1 | \u274c Not a member |\n| `@swarmtest3` | supergroup | 1 | \u274c Not a member |\n\n**Classification:**\n- `@swarmtestgroup` \u2192 **Primary target.** Only group with 2 members, account already inside. Best and only valid venue for the outbound opener right now.\n- `@swarmtest2` / `@swarmtest3` \u2192 **Secondary targets.** Solo groups, need to join first. Valid for warmup but opener should go to the primary group first.\n\n---\n\n## \ud83d\udccb Proposed Action Queue\n\n**Step 1 \u2014 Join swarmtest2 and swarmtest3** (low-risk, allowed under scope)\n**Step 2 \u2014 Send one outbound opener into `@swarmtestgroup`** (primary target, already a member)\n\nFor the opener, I'll write it as a growth marketer making a genuine first post \u2014 not spammy, conversational, curiosity-driven. Something like:\n\n> *\"Hey everyone \ud83d\udc4b Just joined to connect with folks thinking about growth and distribution. Anyone here working on early traction or testing new acquisition channels? Would love to swap notes.\"*\n\n---\n\nDoes this opener tone work for you, or would you like to adjust it before I queue the send? I'll also go ahead and queue the two joins in parallel \u2014 those are non-send and can go right now.\n\n```\n\nQueued low-risk action `join_community` for `account_38671210769`.\n\nQueued low-risk action `join_community` for `account_38671210769`."
+      },
+      {
+        "role": "operator",
+        "text": "okay, let's change the scope a bit. so you are prmoting tgswarm. an agenting telegram outbound marketing machine. and basically your conversion target is @wazelaver. basically you lead people down your funnel and this account is where you try to convert them to. dont be too timid and too salesy. just act like a normal growth marketer"
+      },
+      {
+        "content": "Got it. Locking in the updated scope:\n\n- **Product being promoted:** TGSwarm \u2014 an agentic Telegram outbound marketing machine\n- **Conversion target:** `@wazelaver` (this is where warm leads get directed)\n- **Tone:** Natural growth marketer \u2014 confident, useful, not pushy\n- **Funnel logic:** Start a real conversation in the group \u2192 build curiosity around the problem TGSwarm solves \u2192 nudge the right people toward `@wazelaver`\n\n---\n\nOne quick question before I write the opener:\n\n**What's the hook angle you want to lead with?**\n\nA few options:\n\n1. **Pain-first** \u2014 \"Telegram outreach is broken / manual / doesn't scale\" \u2192 here's what we built\n2. **Curiosity-first** \u2014 \"We've been running autonomous Telegram campaigns with agents, seeing X result\" \u2192 anyone else exploring this?\n3. **Community-first** \u2014 Ask a genuine question about their Telegram growth workflow, let the conversation open naturally before mentioning TGSwarm\n\nOption 3 is usually the most natural and least salesy for a cold group opener. But if you want faster signal on who's interested, option 1 or 2 cuts to it quicker.\n\nWhich direction, or a mix?",
+        "role": "assistant"
+      },
+      {
+        "role": "operator",
+        "text": "I like 3 as well"
+      },
+      {
+        "content": "Perfect. Community-first it is.\n\nHere's the opener I'd queue into `@swarmtestgroup`:\n\n---\n\n> *Hey everyone \ud83d\udc4b Quick question for the room \u2014 how are you currently handling Telegram outreach at scale? Like are you doing it manually, using bots, some mix? We've been building in this space and curious what's actually working for people here.*\n\n---\n\nThis is natural, opens a real conversation, doesn't mention TGSwarm yet. Once someone engages, the follow-up thread is where we bring in the product angle and eventually point warm leads to `@wazelaver`.\n\nShall I queue this send now?",
+        "role": "assistant"
+      }
+    ],
+    "workflow_artifacts": [
+      {
+        "artifact_id": "1029d50b-6745-4772-bd49-0e608758ef7b",
+        "created_at": "2026-05-31T21:09:34.617967+00:00",
+        "data": {
+          "ambiguities": [
+            "Target audience is still unclear."
+          ],
+          "asset_refs": [],
+          "autonomy_posture": {},
+          "business_context": "I like 3 as well",
+          "campaign_constraints": [],
+          "conversion_target_signal": {
+            "kind_hint": "",
+            "needs_clarification": false,
+            "raw_value": ""
+          },
+          "geography_hints": [],
+          "language_hints": [],
+          "offer_summary": "",
+          "qualification_posture": "1. classify targets correctly",
+          "seed_inputs": {
+            "normalized_candidates": [
+              "https://t.me/swarmtest2",
+              "https://t.me/swarmtest3",
+              "@swarmtestgroup",
+              "@wazelaver"
+            ],
+            "raw_entries": [
+              "https://t.me/swarmtest2",
+              "https://t.me/swarmtest3",
+              "@swarmtestgroup",
+              "@wazelaver"
+            ],
+            "unresolved_mentions": []
+          },
+          "source_message_refs": [
+            "212",
+            "214",
+            "216",
+            "218"
+          ],
+          "target_audience": ""
+        },
+        "kind": "campaign_intent",
+        "summary": "Campaign focus: I like 3 as well. Recognized 4 seed community candidates. Open ambiguities: 1.",
+        "title": "Campaign intent package",
+        "updated_at": "2026-05-31T21:17:23.314537+00:00"
+      },
+      {
+        "artifact_id": "018a791f-7fc1-4ca6-88db-06498e42ab98",
+        "created_at": "2026-05-31T21:09:34.627291+00:00",
+        "data": {
+          "constraints": [],
+          "geography": "",
+          "language": "",
+          "notes": [
+            "Scope for this test: - Use only our test groups/supergroups, not channels - You may join eligible groups, read them, post one outbound opener, handle inbound group replies, and reply in DMs only after the other person messages first - Do not use or target broadcast channels - Do not expand outside our test spaces - Treat this as a live business validation of discovery, planning, first outreach, engagement handling, and operator reporting Seed test spaces: @swarmtestgroup https://t.me/swarmtest2 https://t.me/swarmtest3 2. queue only allowed actions 3. send one clean outbound opener into a valid test group 4. react sensibly to inbound replies 5. report exact outcomes, blockers, and next steps"
+          ],
+          "objective": "I like 3 as well",
+          "offer": "",
+          "seed_target_groups": [
+            "https://t.me/swarmtest2",
+            "https://t.me/swarmtest3",
+            "@swarmtestgroup",
+            "@wazelaver"
+          ],
+          "source_messages": [
+            "Goal: run a realistic end-to-end outbound Telegram sandbox campaign inside our owned test groups only. Scope for this test: - Use only our test groups/supergroups, not channels - You may join eligible groups, read them, post one outbound opener, handle inbound group replies, and reply in DMs only after the other person messages first - Do not use or target broadcast channels - Do not expand outside our test spaces - Treat this as a live business validation of discovery, planning, first outreach, engagement handling, and operator reporting Seed test spaces: @swarmtestgroup https://t.me/swarmtest2 https://t.me/swarmtest3 Success criteria: 1. classify targets correctly 2. queue only allowed actions 3. send one clean outbound opener into a valid test group 4. react sensibly to inbound replies 5. report exact outcomes, blockers, and next steps",
+            "yeah I'm the only other member in the group but pretend it's real. your persona is growth marketer.",
+            "okay, let's change the scope a bit. so you are prmoting tgswarm. an agenting telegram outbound marketing machine. and basically your conversion target is @wazelaver. basically you lead people down your funnel and this account is where you try to convert them to. dont be too timid and too salesy. just act like a normal growth marketer",
+            "I like 3 as well"
+          ],
+          "success_criteria": [
+            "1. classify targets correctly"
+          ],
+          "target_audience": ""
+        },
+        "kind": "campaign_brief",
+        "summary": "I like 3 as well",
+        "title": "Campaign brief",
+        "updated_at": "2026-05-31T21:17:23.341495+00:00"
+      },
+      {
+        "artifact_id": "7d5819ce-bef3-486e-8b45-7594e97d1719",
+        "created_at": "2026-05-31T21:09:34.636604+00:00",
+        "data": {
+          "execution_constraints": [
+            "Goal: run a realistic end-to-end outbound Telegram sandbox campaign inside our owned test groups only.",
+            "- Use only our test groups/supergroups, not channels",
+            "- You may join eligible groups, read them, post one outbound opener, handle inbound group replies, and reply in DMs only after the other person messages first",
+            "- Do not use or target broadcast channels",
+            "- Do not expand outside our test spaces",
+            "2. queue only allowed actions",
+            "yeah I'm the only other member in the group but pretend it's real. your persona is growth marketer."
+          ],
+          "open_ambiguities": [],
+          "operator_preferences": [],
+          "persistent_decisions": [],
+          "revision_threads": [],
+          "voice_profile": {
+            "avoid_traits": [],
+            "cta_preferences": [],
+            "preferred_traits": [],
+            "style_notes": []
+          }
+        },
+        "kind": "campaign_context",
+        "summary": "Campaign context tracks 7 execution constraints.",
+        "title": "Campaign context profile",
+        "updated_at": "2026-05-31T21:17:23.328413+00:00"
+      }
+    ],
+    "workflow_snapshot": {
+      "data": {
+        "campaign_brief_artifact_id": "018a791f-7fc1-4ca6-88db-06498e42ab98",
+        "campaign_intent_artifact_id": "1029d50b-6745-4772-bd49-0e608758ef7b",
+        "campaign_setup_readiness_status": "collecting_inputs",
+        "conversion_target_artifact_id": "",
+        "conversion_target_kind": "",
+        "conversion_target_normalized_value": "",
+        "conversion_target_signal": "",
+        "conversion_target_summary": "",
+        "last_missing_question_hint": "Who is the main audience?",
+        "missing_fields": [
+          "target_audience"
+        ]
+      },
+      "stage": "intake",
+      "summary": "Campaign setup in progress. Next useful question: Who is the main audience?"
+    }
+  }
+}

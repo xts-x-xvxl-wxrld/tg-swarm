@@ -1,18 +1,24 @@
-"""Account manager specialist agent for assignment planning with pacing rules."""
+"""Account-planning surface agent for assignment planning with pacing rules."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from uuid import uuid4
 
 import anthropic
 
+from telegram_app.agent_runtime import AgentRuntimeBroker
 from telegram_app.approvals import ApprovalManager
 from telegram_app.campaign_memory import CampaignMemoryManager
-from telegram_app.capabilities import AccountCapability
+from telegram_app.capabilities import (
+    AccountCapability,
+    CommunityCapability,
+    MembershipCapability,
+    MessagingCapability,
+)
+from telegram_app.llm import TelegramCapabilityToolbox, resolve_model
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import (
     ApprovalRecord,
@@ -22,7 +28,12 @@ from telegram_app.models import (
 )
 from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.sessions import SessionManager
-from telegram_app.workflow_validation import parse_marked_json_block, validate_account_assignment_plan
+from telegram_app.workflow_validation import (
+    parse_marked_json_block,
+    parse_output_proposal_list,
+    strip_marked_block,
+    validate_account_assignment_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +101,6 @@ def _load_prompt(name: str) -> str:
     return (REPO_ROOT / "prompts" / name).read_text(encoding="utf-8")
 
 
-def _resolve_model() -> str:
-    model = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6").strip()
-    if "/" in model:
-        model = model.split("/", 1)[1]
-    if not model.startswith("claude-"):
-        model = "claude-sonnet-4-6"
-    return model
-
-
 def _get_latest_artifact_of_kind(
     session_manager: SessionManager,
     session: SessionRecord,
@@ -111,21 +113,36 @@ def _get_latest_artifact_of_kind(
 
 
 class AccountManagerAgent:
-    """Specialist agent for account assignment planning with pacing rules."""
+    """Planning-surface agent for account assignment planning with pacing rules."""
 
     def __init__(
         self,
         session_manager: SessionManager | None = None,
         approval_manager: ApprovalManager | None = None,
         account_capability: AccountCapability | None = None,
+        community_capability: CommunityCapability | None = None,
+        membership_capability: MembershipCapability | None = None,
+        messaging_capability: MessagingCapability | None = None,
         monitor: RuntimeEventLogger | None = None,
+        runtime_broker: AgentRuntimeBroker | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._approval_manager = approval_manager
         self._account_capability = account_capability
+        self._community_capability = community_capability
+        self._membership_capability = membership_capability
+        self._messaging_capability = messaging_capability
         self._monitor = monitor or NullRuntimeEventLogger()
+        self._runtime_broker = runtime_broker
         self._memory_manager = CampaignMemoryManager()
         self._client = anthropic.Anthropic()
+        self._toolbox = TelegramCapabilityToolbox(
+            account_capability=account_capability,
+            community_capability=community_capability,
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+        )
+        self.last_proposal_payloads: list[dict[str, object]] = []
 
     def run(
         self,
@@ -159,7 +176,15 @@ class AccountManagerAgent:
         system = [
             {"type": "text", "text": _load_prompt("account_manager.md")},
             {"type": "text", "text": _load_prompt("shared_runtime.md")},
-            {"type": "text", "text": build_runtime_context(session, pending_approval=None)},
+            {
+                "type": "text",
+                "text": build_runtime_context(
+                    session,
+                    pending_approval=None,
+                    work_type="account_planning",
+                    agent_runtime_broker=self._runtime_broker,
+                ),
+            },
         ]
         specialist_memory = self._memory_manager.load_agent_prompt_memory(session, "account_manager")
         if specialist_memory:
@@ -172,7 +197,7 @@ class AccountManagerAgent:
             )
         messages = [{"role": "user", "content": user_content}]
 
-        model = _resolve_model()
+        model = resolve_model()
         logger.info("AccountManagerAgent calling Anthropic API model=%s", model)
         self._monitor.record_event(
             component="account_manager_agent",
@@ -187,7 +212,8 @@ class AccountManagerAgent:
         )
 
         try:
-            api_response = self._client.messages.create(
+            completion = self._toolbox.run_completion(
+                client=self._client,
                 model=model,
                 max_tokens=4096,
                 system=system,
@@ -203,9 +229,8 @@ class AccountManagerAgent:
             )
             raise
 
-        final_output = "".join(
-            block.text for block in api_response.content if hasattr(block, "text")
-        ).strip()
+        final_output = completion.final_output
+        self.last_proposal_payloads = parse_output_proposal_list(final_output) or []
 
         plan_data = self._parse_plan_json(final_output)
         operator_text = self._strip_json_block(final_output)
@@ -259,6 +284,8 @@ class AccountManagerAgent:
                 "artifact_id": artifact.artifact_id if artifact is not None else "",
                 "approval_id": approval.approval_id if approval is not None else "",
                 "validation_error": validation_error or "",
+                "tool_call_count": completion.tool_call_count,
+                "tool_names": completion.tool_names,
             },
         )
         return operator_text, artifact, approval
@@ -311,6 +338,13 @@ class AccountManagerAgent:
         self._memory_manager.write_agent_working_memory(session, "account_manager", "\n".join(lines))
 
     def _build_account_context(self) -> list[str]:
+        if self._runtime_broker is not None:
+            roster_summary = self._runtime_broker.build_account_roster_summary()
+            if roster_summary:
+                return [
+                    "Account roster:",
+                    json.dumps(roster_summary, ensure_ascii=True, sort_keys=True),
+                ]
         if self._account_capability is None:
             return ["Account roster: unavailable"]
 
@@ -328,10 +362,7 @@ class AccountManagerAgent:
         return parse_marked_json_block(output, ACCOUNT_ASSIGNMENT_PLAN_JSON_MARKER) or {}
 
     def _strip_json_block(self, output: str) -> str:
-        if ACCOUNT_ASSIGNMENT_PLAN_JSON_MARKER not in output:
-            return output.strip()
-        operator_text, _, _ = output.partition(ACCOUNT_ASSIGNMENT_PLAN_JSON_MARKER)
-        return operator_text.strip()
+        return strip_marked_block(output, ACCOUNT_ASSIGNMENT_PLAN_JSON_MARKER)
 
     def _build_invalid_plan_response(self, operator_text: str, validation_error: str) -> str:
         summary = operator_text.strip() or "I generated an account-planning draft, but I could not trust its structured output."

@@ -160,3 +160,92 @@ class StubMessagingCapability:
             audit={"implementation": "stub_messaging_capability"},
             error="Live message sends are not implemented yet.",
         )
+
+    def send_reply(
+        self,
+        account_id: str,
+        chat_id: str,
+        reply_to_message_id: str | int,
+        text: str,
+        *,
+        approval_context: dict[str, object] | None = None,
+    ) -> CapabilityResult:
+        return CapabilityResult(
+            success=False,
+            data={
+                "account_id": account_id,
+                "chat_id": chat_id,
+                "reply_to_message_id": str(reply_to_message_id).strip(),
+                "text": text,
+                "approval_context": dict(approval_context or {}),
+                "source": "stub",
+            },
+            audit={"implementation": "stub_messaging_capability"},
+            error="Live reply sends are not implemented yet.",
+        )
+
+    def mark_read(
+        self,
+        account_id: str,
+        chat_id: str,
+        message_id: str | int | None = None,
+    ) -> CapabilityResult:
+        return CapabilityResult(
+            success=False,
+            data={
+                "account_id": account_id,
+                "chat_id": chat_id,
+                "message_id": "" if message_id is None else str(message_id).strip(),
+                "source": "stub",
+            },
+            audit={"implementation": "stub_messaging_capability"},
+            error="Managed-account read-state updates are not implemented yet.",
+        )
+
+    def get_dialog_history(
+        self,
+        account_id: str,
+        peer_id: str,
+        limit: int = 20,
+    ) -> CapabilityResult:
+        return CapabilityResult(
+            success=False,
+            data={
+                "account_id": account_id,
+                "peer_id": peer_id,
+                "limit": limit,
+                "messages": [],
+                "source": "stub",
+            },
+            audit={"implementation": "stub_messaging_capability"},
+            error="Managed-account dialog history reads are not implemented yet.",
+        )
+
+    def list_recent_dialogs(
+        self,
+        account_id: str,
+        limit: int = 20,
+    ) -> CapabilityResult:
+        return CapabilityResult(
+            success=False,
+            data={
+                "account_id": account_id,
+                "limit": limit,
+                "dialogs": [],
+                "source": "stub",
+            },
+            audit={"implementation": "stub_messaging_capability"},
+            error="Managed-account dialog listing is not implemented yet.",
+        )
+
+    def leave_dialog(self, account_id: str, peer_id: str) -> CapabilityResult:
+        return CapabilityResult(
+            success=False,
+            data={
+                "account_id": account_id,
+                "peer_id": peer_id,
+                "source": "stub",
+            },
+            audit={"implementation": "stub_messaging_capability"},
+            error="Managed-account dialog leave actions are not implemented yet.",
+        )

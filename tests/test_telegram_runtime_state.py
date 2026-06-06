@@ -8,6 +8,8 @@ from agents.account_manager.agent import AccountManagerAgent, _prompt_safe_artif
 from agents.discovery.agent import DiscoveryAgent
 from agents.strategy.agent import StrategyAgent, _prompt_safe_artifact_data as strategy_prompt_safe_artifact_data
 from telegram_app.app_service import TelegramAppService
+from telegram_app.campaign_assets import CampaignAssetAnalyzer, CampaignAssetIntakeCoordinator, DownloadedTelegramAttachment
+from telegram_app.campaign_setup import get_campaign_setup_state
 from telegram_app.campaigns import CampaignManager
 from telegram_app.scheduling import ScheduleManager, ScheduledWorkDispatcher
 from telegram_app.capabilities import (
@@ -17,19 +19,28 @@ from telegram_app.capabilities import (
     StubMessagingCapability,
 )
 from telegram_app.discovery import DISCOVERY_JSON_MARKER, persist_discovery_shortlist
-from telegram_app.intake import StructuredIntakeCoordinator, get_campaign_brief_artifact
+from telegram_app.intake import (
+    StructuredIntakeCoordinator,
+    get_campaign_brief_artifact,
+    get_campaign_intent_artifact,
+    get_conversion_target_artifact,
+)
 from telegram_app.json_store import load_json_file, write_json_file
+from telegram_app.live_execution import LiveExecutionManager
 from telegram_app.monitoring import JsonlRuntimeEventLogger
 from telegram_app.approvals import ApprovalManager, JsonApprovalStore
 from telegram_app.orchestrator import PurposeBuiltOrchestrator
 from telegram_app.orchestrator.context_builder import build_runtime_context
 from telegram_app.orchestrator.orchestrator import (
-    SCHEDULE_ACTION_JSON_MARKER,
     _build_messages,
     _classify_approval_response,
+    _is_activation_request,
 )
+from telegram_app.orchestrator.reasoning_surfaces import reasoning_surface_for_work_type
+from telegram_app.prepared_execution import PreparedExecutionManager, PreparedExecutionService
 from telegram_app.models import (
     ApprovalStatus,
+    CampaignAssetKind,
     ScheduleStatus,
     WorkItemStatus,
     WorkflowArtifactKind,
@@ -37,7 +48,7 @@ from telegram_app.models import (
     WorkflowStage,
 )
 from telegram_app.sessions import JsonSessionStore, SessionManager
-from telegram_app.transport import TelegramUpdate
+from telegram_app.transport import TelegramAttachment, TelegramUpdate
 from telegram_app.work_items import WorkItemManager
 
 
@@ -469,6 +480,23 @@ class EchoOrchestrator:
         )
 
 
+class FakeAttachmentDownloader:
+    def __init__(self, files: dict[str, DownloadedTelegramAttachment]) -> None:
+        self.files = files
+        self.calls: list[str] = []
+
+    def download_attachment(self, attachment: TelegramAttachment) -> DownloadedTelegramAttachment:
+        self.calls.append(attachment.telegram_file_id)
+        if attachment.telegram_file_id not in self.files:
+            raise RuntimeError(f"Unknown test attachment {attachment.telegram_file_id}")
+        return self.files[attachment.telegram_file_id]
+
+
+class FailingAssetAnalyzer(CampaignAssetAnalyzer):
+    def analyze(self, stored_file_path, attachment):  # noqa: ANN001
+        raise RuntimeError("analysis exploded")
+
+
 class FailingStrategyCommunityCapability:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -745,8 +773,98 @@ def test_structured_intake_creates_campaign_brief_and_advances_snapshot(tmp_path
     assert campaign_brief.data["objective"] == "Find Telegram communities for AI founders"
     assert campaign_brief.data["target_audience"] == "AI founders"
     assert campaign_brief.data["geography"] == "Europe"
-    assert snapshot.stage is WorkflowStage.DISCOVERY
+    assert snapshot.stage is WorkflowStage.INTAKE
     assert snapshot.data["campaign_brief_artifact_id"] == campaign_brief.artifact_id
+    assert snapshot.data["campaign_setup_readiness_status"] == "ready_to_confirm"
+
+    setup_state = get_campaign_setup_state(reloaded_session)
+    assert setup_state["goal"] == "Find Telegram communities for AI founders"
+    assert setup_state["audience"] == "AI founders"
+    assert setup_state["readiness_status"] == "ready_to_confirm"
+
+
+def test_structured_intake_persists_campaign_intent_package(tmp_path) -> None:
+    store = JsonSessionStore(tmp_path / "sessions.json")
+    manager = SessionManager(store)
+    intake = StructuredIntakeCoordinator(manager)
+    session = manager.start_session("operator-intent")
+
+    intake.ingest_operator_turn(
+        session,
+        (
+            "Goal: Find Telegram communities for AI founders\n"
+            "Audience: AI founders\n"
+            "Seed groups: @eu_ai_founders; t.me/berlin_ai_builders; AI founder circles\n"
+            "Constraints: prioritize English-speaking groups\n"
+            "Qualified leads should go to t.me/johndoe"
+        ),
+        source_message_id="5001",
+    )
+
+    reloaded_session = JsonSessionStore(tmp_path / "sessions.json").get(session.session_id)
+    assert reloaded_session is not None
+
+    campaign_intent = get_campaign_intent_artifact(reloaded_session)
+    conversion_target = get_conversion_target_artifact(reloaded_session)
+    snapshot = manager.get_workflow_snapshot(reloaded_session)
+
+    assert campaign_intent is not None
+    assert conversion_target is not None
+    assert campaign_intent.data["business_context"] == "Find Telegram communities for AI founders"
+    assert campaign_intent.data["target_audience"] == "AI founders"
+    assert campaign_intent.data["campaign_constraints"] == ["prioritize English-speaking groups"]
+    assert campaign_intent.data["language_hints"] == ["English"]
+    assert campaign_intent.data["seed_inputs"]["normalized_candidates"] == [
+        "@eu_ai_founders",
+        "https://t.me/berlin_ai_builders",
+    ]
+    assert campaign_intent.data["seed_inputs"]["unresolved_mentions"] == ["AI founder circles"]
+    assert campaign_intent.data["conversion_target_signal"]["raw_value"] == "t.me/johndoe"
+    assert campaign_intent.data["conversion_target_signal"]["kind_hint"] == "telegram_dm"
+    assert campaign_intent.data["source_message_refs"] == ["5001"]
+    assert conversion_target.data["raw_value"] == "t.me/johndoe"
+    assert conversion_target.data["normalized_value"] == "https://t.me/johndoe"
+    assert conversion_target.data["destination_kind"] == "telegram_dm"
+    assert conversion_target.data["destination_family"] == "telegram"
+    assert conversion_target.data["allowed_action_types"] == ["send_dm"]
+    assert conversion_target.summary == "Telegram DM: t.me/johndoe."
+    assert snapshot.data["campaign_intent_artifact_id"] == campaign_intent.artifact_id
+    assert snapshot.data["conversion_target_artifact_id"] == conversion_target.artifact_id
+    assert snapshot.data["conversion_target_kind"] == "telegram_dm"
+    assert snapshot.data["conversion_target_normalized_value"] == "https://t.me/johndoe"
+    assert snapshot.data["conversion_target_signal"] == "t.me/johndoe"
+    assert snapshot.data["conversion_target_summary"] == "Telegram DM: t.me/johndoe."
+    assert snapshot.data["campaign_intent_ambiguities"] == ["Unresolved seed inputs: AI founder circles"]
+
+
+def test_structured_intake_normalizes_external_conversion_target_contract(tmp_path) -> None:
+    store = JsonSessionStore(tmp_path / "sessions.json")
+    manager = SessionManager(store)
+    intake = StructuredIntakeCoordinator(manager)
+    session = manager.start_session("operator-conversion-website")
+
+    intake.ingest_operator_turn(
+        session,
+        (
+            "Goal: Reach B2B SaaS founders\n"
+            "Audience: B2B SaaS founders\n"
+            "Qualified leads should go to the landing page https://example.com/demo?ref=telegram."
+        ),
+        source_message_id="7001",
+    )
+
+    reloaded_session = JsonSessionStore(tmp_path / "sessions.json").get(session.session_id)
+    assert reloaded_session is not None
+
+    conversion_target = get_conversion_target_artifact(reloaded_session)
+    assert conversion_target is not None
+    assert conversion_target.data["raw_value"] == "the landing page https://example.com/demo?ref=telegram"
+    assert conversion_target.data["normalized_value"] == "https://example.com/demo?ref=telegram"
+    assert conversion_target.data["destination_kind"] == "external_website"
+    assert conversion_target.data["destination_family"] == "external"
+    assert conversion_target.data["allowed_action_types"] == ["share_external_link"]
+    assert conversion_target.data["proof_requirement"] == "external_link_or_submission_path_delivered"
+    assert conversion_target.summary == "External website: the landing page https://example.com/demo?ref=telegram."
 
 
 def test_structured_intake_merges_follow_up_constraints_without_overwriting_goal(tmp_path) -> None:
@@ -772,7 +890,8 @@ def test_structured_intake_merges_follow_up_constraints_without_overwriting_goal
     assert campaign_brief.data["target_audience"] == "fintech founders"
     assert "avoid communities that ban promotion" in campaign_brief.data["constraints"]
     assert "prioritize English-speaking groups" in campaign_brief.data["constraints"]
-    assert snapshot.stage is WorkflowStage.DISCOVERY
+    assert snapshot.stage is WorkflowStage.INTAKE
+    assert snapshot.data["campaign_setup_readiness_status"] == "ready_to_confirm"
 
 
 def test_runtime_context_omits_campaign_brief_source_messages(tmp_path) -> None:
@@ -787,7 +906,10 @@ def test_runtime_context_omits_campaign_brief_source_messages(tmp_path) -> None:
     intake.ingest_operator_turn(session, "Find Telegram communities for fintech founders in MENA")
     intake.ingest_operator_turn(
         session,
-        "Constraints: avoid communities that ban promotion; prioritize English-speaking groups",
+        (
+            "Constraints: avoid communities that ban promotion; prioritize English-speaking groups\n"
+            "Qualified leads should go to @fintechcloser"
+        ),
     )
 
     active_work_item = work_item_manager.ensure_work_item(
@@ -814,12 +936,402 @@ def test_runtime_context_omits_campaign_brief_source_messages(tmp_path) -> None:
     )
 
     assert "campaign_brief_data" in context
+    assert "campaign_intent_data" in context
+    assert "campaign_intent_summary" in context
+    assert "conversion_target_data" in context
+    assert "conversion_target_summary" in context
+    assert '"destination_kind": "telegram_dm"' in context
     assert "source_messages" not in context
     assert "constraints" in context
     assert "campaign_attached: true" in context
     assert "campaign_id: cmp-context" in context
     assert "active_work_item_count: 1" in context
     assert "active_schedule_count: 1" in context
+    assert "routing_model: work_and_pressure_first" in context
+    assert '"reasoning_surface": "campaign_planning"' in context
+    assert '"surface": "campaign_observation"' in context
+
+
+def test_reasoning_surface_defaults_new_work_families_to_campaign_planning() -> None:
+    assert reasoning_surface_for_work_type("conversion_acceleration_review") == "campaign_planning"
+    assert reasoning_surface_for_work_type("observation") == "campaign_observation"
+
+
+def test_telegram_update_from_payload_normalizes_document_and_photo_attachments() -> None:
+    payload = {
+        "message": {
+            "message_id": 991,
+            "chat": {"id": 42},
+            "from": {"id": 7},
+            "caption": "Creative references for the campaign",
+            "document": {
+                "file_id": "doc-file-1",
+                "file_unique_id": "doc-unique-1",
+                "file_name": "brief.txt",
+                "mime_type": "text/plain",
+                "file_size": 128,
+            },
+            "photo": [
+                {"file_id": "small-photo", "file_unique_id": "photo-small", "width": 90, "height": 90, "file_size": 300},
+                {"file_id": "large-photo", "file_unique_id": "photo-large", "width": 640, "height": 480, "file_size": 2400},
+            ],
+        }
+    }
+
+    update = TelegramUpdate.from_payload(payload)
+
+    assert update.text == "Creative references for the campaign"
+    assert update.message_id == "991"
+    assert len(update.attachments) == 2
+    assert update.attachments[0].kind is CampaignAssetKind.DOCUMENT
+    assert update.attachments[0].telegram_file_id == "doc-file-1"
+    assert update.attachments[0].caption == "Creative references for the campaign"
+    assert update.attachments[1].kind is CampaignAssetKind.IMAGE
+    assert update.attachments[1].telegram_file_id == "large-photo"
+    assert update.attachments[1].width == 640
+    assert update.attachments[1].height == 480
+
+
+def test_telegram_app_service_ingests_document_attachment_into_campaign_workspace_and_setup_state(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    downloader = FakeAttachmentDownloader(
+        {
+            "doc-file-1": DownloadedTelegramAttachment(
+                content=b"Goal: Reach AI founders\nAudience: AI founders in Europe\nOffer: Telegram automation help",
+                file_name="campaign-brief.txt",
+                mime_type="text/plain",
+            )
+        }
+    )
+    service = TelegramAppService(
+        session_manager=session_manager,
+        approval_manager=approval_manager,
+        orchestrator=EchoOrchestrator(),
+        intake_coordinator=StructuredIntakeCoordinator(session_manager),
+        asset_intake_coordinator=CampaignAssetIntakeCoordinator(session_manager, downloader=downloader),
+        campaign_manager=campaign_manager,
+    )
+
+    response = service.handle_update(
+        TelegramUpdate(
+            chat_id="chat-assets",
+            user_id="operator-assets",
+            text="",
+            message_id="1001",
+            attachments=[
+                TelegramAttachment(
+                    attachment_id="1001:document:0",
+                    kind=CampaignAssetKind.DOCUMENT,
+                    telegram_file_id="doc-file-1",
+                    telegram_file_unique_id="doc-unique-1",
+                    telegram_message_id="1001",
+                    file_name="campaign-brief.txt",
+                    mime_type="text/plain",
+                    caption="Use this as campaign context",
+                    size_bytes=128,
+                )
+            ],
+        )
+    )
+
+    active_session = session_manager.get_active_session("operator-assets")
+    assert active_session is not None
+    assert response.messages[0].text == (
+        "Uploaded 1 document asset for campaign context."
+        " I noted some uncertainty about how these assets should be used beyond campaign context."
+    )
+    assert get_campaign_brief_artifact(active_session) is None
+
+    setup_state = get_campaign_setup_state(active_session)
+    assert len(setup_state["asset_refs"]) == 1
+    asset_id = setup_state["asset_refs"][0]
+
+    snapshot = session_manager.get_workflow_snapshot(active_session)
+    assert snapshot.data["asset_ref_count"] == 1
+    assert snapshot.data["recent_asset_refs"] == [asset_id]
+
+    workspace = Path(active_session.campaign_workspace_path or "")
+    manifest = json.loads((workspace / "assets" / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["assets"]) == 1
+    stored_asset = manifest["assets"][0]
+    assert stored_asset["asset_id"] == asset_id
+    assert stored_asset["analysis_summary"]
+    assert stored_asset["inferred_roles"] == ["campaign_context"]
+    assert stored_asset["uncertainty_notes"] == ["Use beyond campaign context is still uncertain."]
+    assert stored_asset["sendable"] is False
+    assert stored_asset["operator_labeled_sendable"] is False
+    assert (workspace / stored_asset["stored_path"]).exists()
+    assert (workspace / stored_asset["derived_text_path"]).exists()
+    assert (workspace / stored_asset["analysis_path"]).exists()
+
+    context = build_runtime_context(active_session, pending_approval=None)
+    assert "campaign_assets_present: true" in context
+    assert asset_id in context
+    assert "campaign_asset_summaries" in context
+    assert "inferred_roles" in context
+
+
+def test_telegram_app_service_persists_multi_role_asset_inference(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    downloader = FakeAttachmentDownloader(
+        {
+            "image-file-roles": DownloadedTelegramAttachment(
+                content=b"fake-image-bytes",
+                file_name="proof-creative.png",
+                mime_type="image/png",
+            )
+        }
+    )
+    service = TelegramAppService(
+        session_manager=session_manager,
+        approval_manager=approval_manager,
+        orchestrator=EchoOrchestrator(),
+        intake_coordinator=StructuredIntakeCoordinator(session_manager),
+        asset_intake_coordinator=CampaignAssetIntakeCoordinator(session_manager, downloader=downloader),
+        campaign_manager=campaign_manager,
+    )
+
+    response = service.handle_update(
+        TelegramUpdate(
+            chat_id="chat-assets",
+            user_id="operator-assets",
+            text="",
+            message_id="1004",
+            attachments=[
+                TelegramAttachment(
+                    attachment_id="1004:photo:0",
+                    kind=CampaignAssetKind.IMAGE,
+                    telegram_file_id="image-file-roles",
+                    telegram_file_unique_id="image-unique-roles",
+                    telegram_message_id="1004",
+                    file_name="proof-creative.png",
+                    mime_type="image/png",
+                    caption="Share this proof creative with qualified leads before booking a demo.",
+                    size_bytes=512,
+                    width=1280,
+                    height=720,
+                )
+            ],
+        )
+    )
+
+    active_session = session_manager.get_active_session("operator-assets")
+    assert active_session is not None
+    assert response.messages[0].text == "Uploaded 1 image asset for campaign context."
+
+    workspace = Path(active_session.campaign_workspace_path or "")
+    manifest = json.loads((workspace / "assets" / "manifest.json").read_text(encoding="utf-8"))
+    stored_asset = manifest["assets"][0]
+    assert stored_asset["inferred_roles"] == [
+        "campaign_context",
+        "outbound_media",
+        "qualification_material",
+        "conversion_support",
+        "proof_or_trust_signal",
+    ]
+    assert stored_asset["uncertainty_notes"] == []
+
+    context = build_runtime_context(active_session, pending_approval=None)
+    assert "proof_or_trust_signal" in context
+    assert "conversion_support" in context
+
+
+def test_telegram_app_service_dedupes_duplicate_attachment_delivery(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    downloader = FakeAttachmentDownloader(
+        {
+            "doc-file-1": DownloadedTelegramAttachment(
+                content=b"Operator note for duplicate-delivery coverage.",
+                file_name="duplicate.txt",
+                mime_type="text/plain",
+            )
+        }
+    )
+    service = TelegramAppService(
+        session_manager=session_manager,
+        approval_manager=approval_manager,
+        orchestrator=EchoOrchestrator(),
+        intake_coordinator=StructuredIntakeCoordinator(session_manager),
+        asset_intake_coordinator=CampaignAssetIntakeCoordinator(session_manager, downloader=downloader),
+        campaign_manager=campaign_manager,
+    )
+    update = TelegramUpdate(
+        chat_id="chat-assets",
+        user_id="operator-assets",
+        text="",
+        message_id="1001",
+        attachments=[
+            TelegramAttachment(
+                attachment_id="1001:document:0",
+                kind=CampaignAssetKind.DOCUMENT,
+                telegram_file_id="doc-file-1",
+                telegram_file_unique_id="doc-unique-1",
+                telegram_message_id="1001",
+                file_name="duplicate.txt",
+                mime_type="text/plain",
+                size_bytes=64,
+            )
+        ],
+    )
+
+    service.handle_update(update)
+    service.handle_update(update)
+
+    active_session = session_manager.get_active_session("operator-assets")
+    assert active_session is not None
+
+    workspace = Path(active_session.campaign_workspace_path or "")
+    manifest = json.loads((workspace / "assets" / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["assets"]) == 1
+    assert downloader.calls == ["doc-file-1"]
+
+    setup_state = get_campaign_setup_state(active_session)
+    assert len(setup_state["asset_refs"]) == 1
+
+
+def test_telegram_app_service_keeps_stored_asset_when_analysis_fails(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    downloader = FakeAttachmentDownloader(
+        {
+            "image-file-1": DownloadedTelegramAttachment(
+                content=b"fake-image-bytes",
+                file_name="hero.png",
+                mime_type="image/png",
+            )
+        }
+    )
+    service = TelegramAppService(
+        session_manager=session_manager,
+        approval_manager=approval_manager,
+        orchestrator=EchoOrchestrator(),
+        intake_coordinator=StructuredIntakeCoordinator(session_manager),
+        asset_intake_coordinator=CampaignAssetIntakeCoordinator(
+            session_manager,
+            downloader=downloader,
+            analyzer=FailingAssetAnalyzer(),
+        ),
+        campaign_manager=campaign_manager,
+    )
+
+    service.handle_update(
+        TelegramUpdate(
+            chat_id="chat-assets",
+            user_id="operator-assets",
+            text="",
+            message_id="1002",
+            attachments=[
+                TelegramAttachment(
+                    attachment_id="1002:photo:0",
+                    kind=CampaignAssetKind.IMAGE,
+                    telegram_file_id="image-file-1",
+                    telegram_file_unique_id="image-unique-1",
+                    telegram_message_id="1002",
+                    file_name="hero.png",
+                    mime_type="image/png",
+                    caption="Hero creative",
+                    size_bytes=256,
+                    width=1280,
+                    height=720,
+                )
+            ],
+        )
+    )
+
+    active_session = session_manager.get_active_session("operator-assets")
+    assert active_session is not None
+
+    workspace = Path(active_session.campaign_workspace_path or "")
+    manifest = json.loads((workspace / "assets" / "manifest.json").read_text(encoding="utf-8"))
+    stored_asset = manifest["assets"][0]
+    assert stored_asset["ingest_status"] == "analysis_failed"
+    assert stored_asset["ingest_error"] == "analysis exploded"
+    assert stored_asset["inferred_roles"] == []
+    assert stored_asset["uncertainty_notes"] == []
+    assert (workspace / stored_asset["stored_path"]).exists()
+    assert stored_asset["analysis_path"]
+    assert (workspace / stored_asset["analysis_path"]).exists()
+
+
+def test_telegram_app_service_marks_asset_sendable_only_on_explicit_command(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    downloader = FakeAttachmentDownloader(
+        {
+            "doc-file-1": DownloadedTelegramAttachment(
+                content=b"Operator note for sendable labeling coverage.",
+                file_name="sendable.txt",
+                mime_type="text/plain",
+            )
+        }
+    )
+    service = TelegramAppService(
+        session_manager=session_manager,
+        approval_manager=approval_manager,
+        orchestrator=EchoOrchestrator(),
+        intake_coordinator=StructuredIntakeCoordinator(session_manager),
+        asset_intake_coordinator=CampaignAssetIntakeCoordinator(session_manager, downloader=downloader),
+        campaign_manager=campaign_manager,
+    )
+
+    service.handle_update(
+        TelegramUpdate(
+            chat_id="chat-assets",
+            user_id="operator-assets",
+            text="",
+            message_id="1003",
+            attachments=[
+                TelegramAttachment(
+                    attachment_id="1003:document:0",
+                    kind=CampaignAssetKind.DOCUMENT,
+                    telegram_file_id="doc-file-1",
+                    telegram_file_unique_id="doc-unique-2",
+                    telegram_message_id="1003",
+                    file_name="sendable.txt",
+                    mime_type="text/plain",
+                    size_bytes=64,
+                )
+            ],
+        )
+    )
+
+    active_session = session_manager.get_active_session("operator-assets")
+    assert active_session is not None
+    asset_id = get_campaign_setup_state(active_session)["asset_refs"][0]
+
+    response = service.handle_update(
+        TelegramUpdate(
+            chat_id="chat-assets",
+            user_id="operator-assets",
+            text=f"mark asset {asset_id} sendable",
+        )
+    )
+
+    workspace = Path(active_session.campaign_workspace_path or "")
+    manifest = json.loads((workspace / "assets" / "manifest.json").read_text(encoding="utf-8"))
+    stored_asset = manifest["assets"][0]
+    assert stored_asset["asset_id"] == asset_id
+    assert stored_asset["sendable"] is True
+    assert stored_asset["operator_labeled_sendable"] is True
+    assert "Marked asset" in response.messages[0].text
 
 
 def test_campaign_sync_preserves_specialist_working_memory_files(tmp_path) -> None:
@@ -849,6 +1361,56 @@ def test_campaign_sync_preserves_specialist_working_memory_files(tmp_path) -> No
 
     assert strategy_notes_path.read_text(encoding="utf-8") == "# Strategy Notes\n\nCustom tactical note.\n"
     assert (Path(campaign.workspace_path) / "overview.md").read_text(encoding="utf-8")
+
+
+def test_campaign_sync_persists_conversion_target_artifact_view(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    session_manager = SessionManager(session_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    intake = StructuredIntakeCoordinator(session_manager)
+    session = session_manager.start_session("operator-conversion-sync")
+    campaign = campaign_manager.ensure_campaign("operator-conversion-sync", campaign_id="cmp-conversion-sync")
+    session_manager.attach_campaign(
+        session,
+        campaign.campaign_id,
+        campaign.workspace_path,
+        canonical_memory_files=campaign.canonical_files,
+        agent_memory_files=campaign.agent_memory_files,
+    )
+
+    intake.ingest_operator_turn(
+        session,
+        (
+            "Goal: Reach AI founders\n"
+            "Audience: AI founders\n"
+            "Qualified leads should go to t.me/foundercloser"
+        ),
+        source_message_id="8801",
+    )
+    campaign_manager.sync_session_memory(session)
+
+    workspace = Path(campaign.workspace_path)
+    artifact_payload = load_json_file(workspace / "artifacts" / "conversion_target.json", default={})
+    background_session = campaign_manager.build_background_session(
+        campaign.campaign_id,
+        stage=WorkflowStage.DISCOVERY,
+        summary="Reload campaign-native context.",
+    )
+
+    assert artifact_payload["data"]["destination_kind"] == "telegram_dm"
+    assert artifact_payload["data"]["normalized_value"] == "https://t.me/foundercloser"
+    assert "Conversion target: Telegram DM: t.me/foundercloser." in (workspace / "overview.md").read_text(encoding="utf-8")
+    assert "- Conversion target: Telegram DM: t.me/foundercloser." in (workspace / "operator-intent.md").read_text(encoding="utf-8")
+    assert background_session is not None
+    assert any(
+        artifact["kind"] == WorkflowArtifactKind.CONVERSION_TARGET.value
+        for artifact in background_session.workflow_state["workflow_artifacts"]
+    )
+    assert background_session.workflow_state["workflow_snapshot"]["data"]["conversion_target_kind"] == "telegram_dm"
+    assert (
+        background_session.workflow_state["workflow_snapshot"]["data"]["conversion_target_summary"]
+        == "Telegram DM: t.me/foundercloser."
+    )
 
 
 def test_telegram_app_service_attaches_campaign_and_syncs_primary_goal(tmp_path) -> None:
@@ -1005,22 +1567,26 @@ def test_orchestrator_turn_can_create_recurring_schedule_from_operator_request(t
 
     orchestrator_output = """I'll keep discovery coverage fresh with a weekly recurring refresh.
 
-SCHEDULE_ACTION_JSON
+COMPILED_PROPOSALS_JSON
 ```json
-{
-  "action": "create",
-  "schedule": {
-    "owner_role": "discovery",
-    "work_type": "discovery",
-    "goal": "Refresh the discovery shortlist for AI founder communities.",
-    "interval_minutes": 10080,
-    "constraints": ["Keep the shortlist focused on Europe."],
-    "priority": "high",
-    "evaluation_metric": "validated_community_count",
-    "minimum_value": 1,
-    "pause_after_consecutive_misses": 2
+[
+  {
+    "kind": "schedule.create",
+    "summary": "Create a weekly discovery refresh.",
+    "payload": {
+      "owner_role": "discovery",
+      "work_type": "discovery",
+      "goal": "Refresh the discovery shortlist for AI founder communities.",
+      "interval_minutes": 10080,
+      "constraints": ["Keep the shortlist focused on Europe."],
+      "priority": "high",
+      "evaluation_metric": "validated_community_count",
+      "minimum_value": 1,
+      "pause_after_consecutive_misses": 2
+    },
+    "confidence": 0.95
   }
-}
+]
 ```"""
 
     fake_content_block = MagicMock()
@@ -1057,7 +1623,7 @@ SCHEDULE_ACTION_JSON
     assert created_schedule.evaluation_metric == "validated_community_count"
     assert created_schedule.minimum_value == 1
     assert created_schedule.pause_after_consecutive_misses == 2
-    assert SCHEDULE_ACTION_JSON_MARKER not in response.messages[0].text
+    assert "COMPILED_PROPOSALS_JSON" not in response.messages[0].text
     assert "saved a recurring `discovery` schedule" in response.messages[0].text.lower()
 
 
@@ -1087,26 +1653,34 @@ def test_orchestrator_turn_can_pause_and_resume_recurring_schedule(tmp_path) -> 
 
     pause_output = """I'll pause that recurring strategy review for now.
 
-SCHEDULE_ACTION_JSON
+COMPILED_PROPOSALS_JSON
 ```json
-{
-  "action": "pause",
-  "schedule": {
-    "schedule_id": "%s"
+[
+  {
+    "kind": "schedule.pause",
+    "summary": "Pause the active recurring strategy review.",
+    "payload": {
+      "schedule_id": "%s"
+    },
+    "confidence": 0.95
   }
-}
+]
 ```""" % schedule.schedule_id
 
     resume_output = """I'll resume that recurring strategy review.
 
-SCHEDULE_ACTION_JSON
+COMPILED_PROPOSALS_JSON
 ```json
-{
-  "action": "resume",
-  "schedule": {
-    "work_type": "strategy"
+[
+  {
+    "kind": "schedule.resume",
+    "summary": "Resume the active recurring strategy review.",
+    "payload": {
+      "work_type": "strategy"
+    },
+    "confidence": 0.95
   }
-}
+]
 ```"""
 
     def _fake_response(text: str) -> MagicMock:
@@ -1330,7 +1904,8 @@ def test_telegram_app_service_normalizes_escaped_newlines_in_new_command(tmp_pat
     assert campaign_brief.data["objective"] == "Find Telegram communities for AI founders"
     assert campaign_brief.data["target_audience"] == "AI founders"
     assert campaign_brief.data["geography"] == "Europe"
-    assert snapshot.stage is WorkflowStage.DISCOVERY
+    assert snapshot.stage is WorkflowStage.INTAKE
+    assert snapshot.data["campaign_setup_readiness_status"] == "ready_to_confirm"
 
 
 def test_structured_intake_parses_multiple_inline_labels_on_one_line(tmp_path) -> None:
@@ -1364,7 +1939,8 @@ def test_structured_intake_parses_multiple_inline_labels_on_one_line(tmp_path) -
     assert campaign_brief.data["objective"] == "Find Telegram communities for AI founders"
     assert campaign_brief.data["target_audience"] == "AI founders"
     assert campaign_brief.data["geography"] == "Europe"
-    assert snapshot.stage is WorkflowStage.DISCOVERY
+    assert snapshot.stage is WorkflowStage.INTAKE
+    assert snapshot.data["campaign_setup_readiness_status"] == "ready_to_confirm"
 
 
 def test_structured_intake_does_not_overwrite_existing_brief_with_follow_up_ack(tmp_path) -> None:
@@ -1388,6 +1964,29 @@ def test_structured_intake_does_not_overwrite_existing_brief_with_follow_up_ack(
     assert campaign_brief.data["geography"] == "Europe"
     assert campaign_brief.data["notes"] == []
     assert snapshot.stage is WorkflowStage.DISCOVERY
+    assert snapshot.data["campaign_setup_readiness_status"] == "confirmed"
+
+
+def test_structured_intake_persists_seed_target_groups_in_setup_and_brief(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    session_manager = SessionManager(session_store)
+    intake = StructuredIntakeCoordinator(session_manager)
+    session = session_manager.start_session("operator-seed-groups")
+
+    intake.ingest_operator_turn(
+        session,
+        "Goal: Find Telegram communities for AI founders\nAudience: AI founders\nSeed groups: @eu_ai_founders, t.me/berlin_ai_builders",
+    )
+
+    campaign_brief = get_campaign_brief_artifact(session)
+    setup_state = get_campaign_setup_state(session)
+    snapshot = session_manager.get_workflow_snapshot(session)
+
+    assert campaign_brief is not None
+    assert campaign_brief.data["seed_target_groups"] == ["@eu_ai_founders", "t.me/berlin_ai_builders"]
+    assert setup_state["seed_target_groups"] == ["@eu_ai_founders", "t.me/berlin_ai_builders"]
+    assert snapshot.stage is WorkflowStage.INTAKE
+    assert snapshot.data["campaign_setup_readiness_status"] == "ready_to_confirm"
 
 
 def test_build_messages_deduplicates_and_trims_history() -> None:
@@ -1431,6 +2030,30 @@ def test_discovery_agent_builds_multiple_search_queries_from_campaign_brief(tmp_
     assert len(queries) == 8
 
 
+def test_discovery_agent_includes_seed_target_groups_in_search_queries(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    session_manager = SessionManager(session_store)
+    session = session_manager.start_session("operator-discovery-seeds")
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.CAMPAIGN_BRIEF,
+        title="Campaign brief",
+        data={
+            "objective": "Find Telegram communities for AI founders",
+            "target_audience": "AI founders",
+            "geography": "Europe",
+            "seed_target_groups": ["@eu_ai_founders", "t.me/berlin_ai_builders"],
+        },
+    )
+
+    agent = DiscoveryAgent(session_manager=session_manager)
+    queries = agent._build_search_queries(session)
+
+    assert queries[:2] == ["AI founders Europe", "AI founders"]
+    assert "@eu_ai_founders" in queries
+    assert "@berlin_ai_builders" in queries
+
+
 def test_discovery_stage_persists_shortlist_and_keeps_review_in_discovery(tmp_path) -> None:
     session_store = JsonSessionStore(tmp_path / "sessions.json")
     approval_store = JsonApprovalStore(tmp_path / "approvals.json")
@@ -1442,6 +2065,8 @@ def test_discovery_stage_persists_shortlist_and_keeps_review_in_discovery(tmp_pa
         session,
         "Goal: Find Telegram communities for AI founders\nAudience: AI founders\nGeography: Europe",
     )
+    intake.ingest_operator_turn(session, "start discovery")
+    intake.ingest_operator_turn(session, "start discovery")
 
     discovery_output = f"""I found a strong initial shortlist for AI founder outreach in Europe.
 
@@ -1539,6 +2164,7 @@ def test_discovery_enrichment_prefers_matched_username_for_profile_lookup(tmp_pa
         session,
         "Goal: Find Telegram communities for AI founders\nAudience: AI founders\nGeography: Europe",
     )
+    intake.ingest_operator_turn(session, "start discovery")
 
     discovery_output = f"""I found a shortlist worth validating further.
 
@@ -1921,6 +2547,189 @@ def test_strategy_review_turn_handles_ambiguous_follow_up_without_llm_call(tmp_p
     assert primary_work_item.status is WorkItemStatus.REVIEW_PENDING
 
 
+def test_discovery_review_approval_reuses_current_strategy_artifact_without_rerun(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    work_item_manager = WorkItemManager(tmp_path / "campaigns")
+    session = session_manager.start_session("operator-discovery-current-strategy")
+    campaign = campaign_manager.ensure_campaign(
+        "operator-discovery-current-strategy",
+        campaign_id="cmp-discovery-current-strategy",
+    )
+    session_manager.attach_campaign(
+        session,
+        campaign.campaign_id,
+        campaign.workspace_path,
+        canonical_memory_files=campaign.canonical_files,
+        agent_memory_files=campaign.agent_memory_files,
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.CAMPAIGN_BRIEF,
+        title="Campaign brief",
+        data={"objective": "Reach AI founders", "target_audience": "AI founders", "geography": "Europe"},
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.COMMUNITY_SHORTLIST,
+        title="Community shortlist",
+        data={"communities": [{"name": "EU AI Founders", "handle": "@eu_ai_founders"}]},
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.STRATEGY_PLAYBOOK,
+        title="Strategy playbook",
+        data={
+            "campaign_strategy_summary": "Lead with founder insight.",
+            "communities": [{"name": "EU AI Founders", "handle": "@eu_ai_founders"}],
+        },
+    )
+    session_manager.replace_workflow_snapshot(
+        session,
+        WorkflowSnapshot(
+            stage=WorkflowStage.DISCOVERY,
+            summary="Community shortlist ready for operator review.",
+        ),
+    )
+    work_item_manager.ensure_work_item(
+        campaign.campaign_id,
+        owner_role="strategy",
+        work_type="strategy",
+        goal="Current strategy is already drafted.",
+        status=WorkItemStatus.COMPLETED,
+    )
+    work_item_manager.ensure_work_item(
+        campaign.campaign_id,
+        owner_role="discovery",
+        work_type="discovery",
+        goal="Review the shortlist.",
+        status=WorkItemStatus.REVIEW_PENDING,
+    )
+
+    mock_client = MagicMock()
+
+    with patch("anthropic.Anthropic", return_value=mock_client):
+        orchestrator = PurposeBuiltOrchestrator(
+            session_manager=session_manager,
+            approval_manager=approval_manager,
+            work_item_manager=work_item_manager,
+            campaign_manager=campaign_manager,
+        )
+        response = orchestrator.handle_turn(
+            session=session,
+            update=TelegramUpdate(
+                chat_id="chat-discovery-current-strategy",
+                user_id="operator-discovery-current-strategy",
+                text="approve",
+            ),
+        )
+
+    assert "already matches the latest approved inputs" in response.messages[0].text.lower()
+    assert mock_client.messages.create.call_count == 0
+    snapshot = session_manager.get_workflow_snapshot(session)
+    assert snapshot.stage is WorkflowStage.STRATEGY
+    assert "already current" in snapshot.summary.lower()
+
+
+def test_strategy_review_approval_reuses_review_pending_account_plan_without_rerun(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    work_item_manager = WorkItemManager(tmp_path / "campaigns")
+    session = session_manager.start_session("operator-strategy-existing-account-plan")
+    campaign = campaign_manager.ensure_campaign(
+        "operator-strategy-existing-account-plan",
+        campaign_id="cmp-strategy-existing-account-plan",
+    )
+    session_manager.attach_campaign(
+        session,
+        campaign.campaign_id,
+        campaign.workspace_path,
+        canonical_memory_files=campaign.canonical_files,
+        agent_memory_files=campaign.agent_memory_files,
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.CAMPAIGN_BRIEF,
+        title="Campaign brief",
+        data={"objective": "Reach AI founders", "target_audience": "AI founders", "geography": "Europe"},
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.COMMUNITY_SHORTLIST,
+        title="Community shortlist",
+        data={"communities": [{"name": "EU AI Founders", "handle": "@eu_ai_founders"}]},
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.STRATEGY_PLAYBOOK,
+        title="Strategy playbook",
+        data={
+            "campaign_strategy_summary": "Lead with founder insight.",
+            "communities": [{"name": "EU AI Founders", "handle": "@eu_ai_founders"}],
+        },
+    )
+    session_manager.create_workflow_artifact(
+        session=session,
+        kind=WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN,
+        title="Account plan",
+        data={
+            "plan_summary": "Use one senior account first.",
+            "assignments": [{"community_name": "EU AI Founders", "assigned_account": "account_senior_1"}],
+        },
+    )
+    session_manager.replace_workflow_snapshot(
+        session,
+        WorkflowSnapshot(
+            stage=WorkflowStage.STRATEGY,
+            summary="Strategy playbook ready for operator review.",
+        ),
+    )
+    work_item_manager.ensure_work_item(
+        campaign.campaign_id,
+        owner_role="account_manager",
+        work_type="account_planning",
+        goal="Account plan draft is ready.",
+        status=WorkItemStatus.REVIEW_PENDING,
+    )
+    work_item_manager.ensure_work_item(
+        campaign.campaign_id,
+        owner_role="strategy",
+        work_type="strategy",
+        goal="Review the strategy playbook.",
+        status=WorkItemStatus.REVIEW_PENDING,
+    )
+
+    mock_client = MagicMock()
+
+    with patch("anthropic.Anthropic", return_value=mock_client):
+        orchestrator = PurposeBuiltOrchestrator(
+            session_manager=session_manager,
+            approval_manager=approval_manager,
+            work_item_manager=work_item_manager,
+            campaign_manager=campaign_manager,
+        )
+        response = orchestrator.handle_turn(
+            session=session,
+            update=TelegramUpdate(
+                chat_id="chat-strategy-existing-account-plan",
+                user_id="operator-strategy-existing-account-plan",
+                text="approve",
+            ),
+        )
+
+    assert "account plan ready" in response.messages[0].text.lower()
+    assert mock_client.messages.create.call_count == 0
+    snapshot = session_manager.get_workflow_snapshot(session)
+    assert snapshot.stage is WorkflowStage.ACCOUNT_PLANNING
+    assert "waiting for review" in snapshot.summary.lower()
+
+
 def test_account_manager_agent_reads_campaign_memory_and_updates_working_memory(tmp_path) -> None:
     session_store = JsonSessionStore(tmp_path / "sessions.json")
     session_manager = SessionManager(session_store)
@@ -2023,7 +2832,7 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
     assert "Be conservative on pacing." in updated_notes
 
 
-def test_orchestrator_routes_from_primary_work_item_before_snapshot_stage(tmp_path) -> None:
+def test_orchestrator_setup_gate_outranks_primary_work_item_during_intake(tmp_path) -> None:
     session_store = JsonSessionStore(tmp_path / "sessions.json")
     approval_store = JsonApprovalStore(tmp_path / "approvals.json")
     session_manager = SessionManager(session_store)
@@ -2066,28 +2875,8 @@ def test_orchestrator_routes_from_primary_work_item_before_snapshot_stage(tmp_pa
         status=WorkItemStatus.IN_PROGRESS,
     )
 
-    strategy_output = """Lead with operator insight, keep the CTA soft, and save direct asks for later.
-
-STRATEGY_PLAYBOOK_JSON
-```json
-{
-  "campaign_strategy_summary": "Start with value-first founder messaging.",
-  "communities": [
-    {
-      "name": "EU AI Founders",
-      "handle": "@eu_ai_founders",
-      "messaging_angle": "Peer-to-peer founder insight",
-      "message_format": "text",
-      "frequency": "once",
-      "timing": "weekday mornings",
-      "risk_notes": "Keep the tone educational."
-    }
-  ]
-}
-```"""
-
     fake_content_block = MagicMock()
-    fake_content_block.text = strategy_output
+    fake_content_block.text = "Let's finish setup first and confirm discovery readiness before strategy work resumes."
     fake_api_response = MagicMock()
     fake_api_response.content = [fake_content_block]
     mock_client = MagicMock()
@@ -2106,17 +2895,16 @@ STRATEGY_PLAYBOOK_JSON
             update=TelegramUpdate(chat_id="chat-work-route", user_id="operator-work-route", text="continue"),
         )
 
-    assert "operator insight" in response.messages[0].text.lower()
+    assert "finish setup first" in response.messages[0].text.lower()
     snapshot = session_manager.get_workflow_snapshot(session)
-    assert snapshot.stage is WorkflowStage.STRATEGY
-    primary_work_item = work_item_manager.get_primary_open_item(campaign.campaign_id)
-    assert primary_work_item is not None
-    assert primary_work_item.work_type == "strategy"
-    assert primary_work_item.status is WorkItemStatus.REVIEW_PENDING
+    assert snapshot.stage is WorkflowStage.INTAKE
+    strategy_item = work_item_manager.find_latest(campaign.campaign_id, work_type="strategy")
+    assert strategy_item is not None
+    assert strategy_item.status is WorkItemStatus.IN_PROGRESS
 
     llm_messages = mock_client.messages.create.call_args.kwargs["messages"]
     assert len(llm_messages) == 1
-    assert "Primary work item goal: Turn the approved shortlist into a founder-first messaging playbook." in llm_messages[0]["content"]
+    assert llm_messages[0]["content"] == "continue"
 
 
 def test_discovery_checkpoint_revision_request_is_not_treated_as_approval(tmp_path) -> None:
@@ -2214,6 +3002,17 @@ Please approve this shortlist or tell me what to change before I move to strateg
 
 def test_approval_classifier_treats_search_more_request_as_rejection() -> None:
     assert _classify_approval_response("okay, should we search a little more?") is False
+
+
+def test_approval_classifier_treats_mixed_approval_and_revision_as_rejection() -> None:
+    assert _classify_approval_response("yes, go ahead, but change the criteria first") is False
+
+
+def test_activation_request_requires_explicit_activation_language() -> None:
+    assert _is_activation_request("activate") is True
+    assert _is_activation_request("Please activate execution now.") is True
+    assert _is_activation_request("Before we activate, can you revise the plan first?") is False
+    assert _is_activation_request("Should we activate later if this looks good?") is False
 
 
 def test_strategy_agent_invalid_playbook_does_not_persist_artifact(tmp_path) -> None:
@@ -2798,6 +3597,7 @@ def test_telegram_app_service_runs_full_specialist_workflow(tmp_path) -> None:
     work_item_manager = WorkItemManager(campaigns_root)
     schedule_manager = ScheduleManager(campaigns_root)
 
+    setup_output = "Campaign setup looks ready. Say `start discovery` when you want me to begin research."
     discovery_output = f"""I found a strong initial shortlist for AI founder outreach in Europe.
 
 Please approve this shortlist or tell me what to change before I move to strategy.
@@ -2878,6 +3678,7 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
 
     mock_client = MagicMock()
     mock_client.messages.create.side_effect = [
+        _fake_response(setup_output),
         _fake_response(discovery_output),
         _fake_response(strategy_output),
         _fake_response(account_plan_output),
@@ -2914,20 +3715,24 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
             )
         )
         second_response = service.handle_update(
-            TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="approve")
+            TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="start discovery")
         )
         third_response = service.handle_update(
-            TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="continue")
+            TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="approve")
         )
         fourth_response = service.handle_update(
+            TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="continue")
+        )
+        fifth_response = service.handle_update(
             TelegramUpdate(chat_id="chat-1", user_id="operator-6", text="approve")
         )
 
-    assert "approve this shortlist" in first_response.messages[0].text.lower()
-    assert "value-first founder positioning" in second_response.messages[0].text.lower()
-    assert "pacing guardrails" in third_response.messages[0].text.lower()
-    assert "approved in chat" in fourth_response.messages[0].text.lower()
-    assert mock_client.messages.create.call_count == 3
+    assert "start discovery" in first_response.messages[0].text.lower()
+    assert "approve this shortlist" in second_response.messages[0].text.lower()
+    assert "value-first founder positioning" in third_response.messages[0].text.lower()
+    assert "pacing guardrails" in fourth_response.messages[0].text.lower()
+    assert "approved in chat" in fifth_response.messages[0].text.lower()
+    assert mock_client.messages.create.call_count == 4
     assert membership_capability.calls == []
     assert messaging_capability.calls == []
 
@@ -2944,14 +3749,20 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
     assert WorkflowArtifactKind.EXECUTION_REPORT not in artifact_kinds
 
     snapshot = session_manager.get_workflow_snapshot(active_session)
-    assert snapshot.stage is WorkflowStage.COMPLETE
+    assert snapshot.stage is WorkflowStage.ACCOUNT_PLANNING
+    assert "campaign remains active" in snapshot.summary.lower()
     assert approval_manager.get_pending_for_session(active_session.session_id) is None
 
     work_items = work_item_manager.list_for_campaign(active_session.campaign_id)
     work_item_statuses = {item.work_type: item.status for item in work_items}
+    work_items_by_type = {item.work_type: item for item in work_items}
     assert work_item_statuses["discovery"] is WorkItemStatus.COMPLETED
     assert work_item_statuses["strategy"] is WorkItemStatus.COMPLETED
     assert work_item_statuses["account_planning"] is WorkItemStatus.COMPLETED
+    assert work_items_by_type["strategy"].trigger_source == "review_acceptance"
+    assert "refreshing strategy planning" in work_items_by_type["strategy"].refresh_reason.lower()
+    assert work_items_by_type["account_planning"].trigger_source == "review_acceptance"
+    assert "refreshing account planning" in work_items_by_type["account_planning"].refresh_reason.lower()
 
     event_lines = (tmp_path / "monitoring" / "runtime_events.jsonl").read_text(encoding="utf-8").strip().splitlines()
     events = [json.loads(line) for line in event_lines]
@@ -3039,8 +3850,15 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
         response = service.handle_update(TelegramUpdate(chat_id="chat-1", user_id="operator-8", text="approve"))
 
     assert "approved in chat" in response.messages[0].text.lower()
+    assert "say `activate`" in response.messages[0].text.lower()
     assert membership_capability.calls == []
     assert messaging_capability.calls == []
+
+    active_session = session_manager.get_active_session("operator-8")
+    assert active_session is not None
+    snapshot = session_manager.get_workflow_snapshot(active_session)
+    assert snapshot.stage is WorkflowStage.ACCOUNT_PLANNING
+    assert "campaign remains active" in snapshot.summary.lower()
 
 
 def test_account_plan_review_completion_does_not_create_execution_artifact(tmp_path) -> None:
@@ -3115,22 +3933,163 @@ ACCOUNT_ASSIGNMENT_PLAN_JSON
         service.handle_update(
             TelegramUpdate(chat_id="chat-1", user_id="operator-9", text="continue")
         )
-        response = service.handle_update(
-            TelegramUpdate(chat_id="chat-1", user_id="operator-9", text="approve")
-        )
+    response = service.handle_update(
+        TelegramUpdate(chat_id="chat-1", user_id="operator-9", text="approve")
+    )
 
     assert "approved in chat" in response.messages[0].text.lower()
+    assert "say `activate`" in response.messages[0].text.lower()
     assert membership_capability.calls == []
     assert messaging_capability.calls == []
 
     active_session = session_manager.get_active_session("operator-9")
     assert active_session is not None
+    snapshot = session_manager.get_workflow_snapshot(active_session)
+    assert snapshot.stage is WorkflowStage.ACCOUNT_PLANNING
+    assert "campaign remains active" in snapshot.summary.lower()
 
     execution_report = session_manager.get_latest_artifact_of_kind(
         active_session,
         WorkflowArtifactKind.EXECUTION_REPORT,
     )
     assert execution_report is None
+
+
+def test_account_plan_activation_prepares_live_execution_state(tmp_path) -> None:
+    session_store = JsonSessionStore(tmp_path / "sessions.json")
+    approval_store = JsonApprovalStore(tmp_path / "approvals.json")
+    session_manager = SessionManager(session_store)
+    approval_manager = ApprovalManager(approval_store)
+    campaign_manager = CampaignManager(tmp_path / "campaigns")
+    work_item_manager = WorkItemManager(tmp_path / "campaigns")
+    live_execution_manager = LiveExecutionManager(tmp_path / "campaigns")
+    prepared_execution_manager = PreparedExecutionManager(tmp_path / "campaigns")
+    prepared_execution_service = PreparedExecutionService(
+        prepared_execution_manager,
+        live_execution_manager,
+        session_manager=session_manager,
+        work_item_manager=work_item_manager,
+    )
+
+    account_plan_output = """The plan is conservative and keeps the first step low-risk.
+
+ACCOUNT_ASSIGNMENT_PLAN_JSON
+```json
+{
+  "plan_summary": "Start with one senior account and keep future expansion separate.",
+  "assignments": [
+    {
+      "community_name": "EU AI Founders",
+      "community_handle": "@eu_ai_founders",
+      "assigned_account": "account_senior_1",
+      "scheduled_posts": [
+        {
+          "day_offset": 0,
+          "time_window": "09:00-11:00",
+          "message_angle": "Peer-to-peer founder insight",
+          "message_text": "Sharing one operator lesson that helped us find traction with AI founders in Europe this quarter."
+        },
+        {
+          "day_offset": 1,
+          "time_window": "10:00-12:00",
+          "message_angle": "Follow-up proof",
+          "message_text": "Following up with a second practical founder note after the first discussion lands."
+        }
+      ],
+      "risk_level": "low",
+      "notes": "Keep the first wave deliberate."
+    }
+  ]
+}
+```"""
+
+    def _fake_response(text: str) -> MagicMock:
+        fake_content_block = MagicMock()
+        fake_content_block.text = text
+        fake_api_response = MagicMock()
+        fake_api_response.content = [fake_content_block]
+        return fake_api_response
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _fake_response(account_plan_output)
+
+    membership_capability = RecordingMembershipCapability()
+    messaging_capability = RecordingMessagingCapability()
+
+    with patch("anthropic.Anthropic", return_value=mock_client):
+        orchestrator = PurposeBuiltOrchestrator(
+            session_manager=session_manager,
+            approval_manager=approval_manager,
+            account_capability=StubAccountCapability(),
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+            work_item_manager=work_item_manager,
+            campaign_manager=campaign_manager,
+            prepared_execution_service=prepared_execution_service,
+        )
+        service = TelegramAppService(
+            session_manager=session_manager,
+            approval_manager=approval_manager,
+            orchestrator=orchestrator,
+            intake_coordinator=StructuredIntakeCoordinator(session_manager),
+            campaign_manager=campaign_manager,
+        )
+
+        session = session_manager.start_session("operator-activation")
+        campaign = campaign_manager.ensure_campaign(
+            "operator-activation",
+            campaign_id="cmp-activate-1",
+            workspace_path=tmp_path / "campaigns" / "cmp-activate-1",
+        )
+        session_manager.attach_campaign(
+            session,
+            campaign_id=campaign.campaign_id,
+            campaign_workspace_path=campaign.workspace_path,
+            canonical_memory_files=campaign.canonical_files,
+            agent_memory_files=campaign.agent_memory_files,
+        )
+        session_manager.replace_workflow_snapshot(
+            session,
+            WorkflowSnapshot(
+                stage=WorkflowStage.ACCOUNT_PLANNING,
+                summary="Ready for account assignment planning.",
+            ),
+        )
+
+        service.handle_update(
+            TelegramUpdate(chat_id="chat-1", user_id="operator-activation", text="continue")
+        )
+        approval_response = service.handle_update(
+            TelegramUpdate(chat_id="chat-1", user_id="operator-activation", text="approve")
+        )
+        activation_response = service.handle_update(
+            TelegramUpdate(chat_id="chat-1", user_id="operator-activation", text="activate")
+        )
+
+    assert "say `activate`" in approval_response.messages[0].text.lower()
+    assert "queued now" in activation_response.messages[0].text.lower()
+    assert membership_capability.calls == []
+    assert messaging_capability.calls == []
+
+    active_session = session_manager.get_active_session("operator-activation")
+    assert active_session is not None
+    snapshot = session_manager.get_workflow_snapshot(active_session)
+    assert snapshot.data["prepared_execution_queued_count"] == 1
+    assert snapshot.data["prepared_execution_held_count"] == 1
+    assert snapshot.data["prepared_execution_blocked_count"] == 0
+    assert str(snapshot.data["prepared_execution_status"]) == "partially_queued"
+
+    batches = prepared_execution_manager.list_batches_for_campaign(campaign.campaign_id)
+    assert len(batches) == 1
+    items = prepared_execution_manager.list_items_for_campaign(campaign.campaign_id, batch_id=batches[0].batch_id)
+    assert len(items) == 2
+    assert {item.status.value for item in items} == {"queued", "prepared"}
+
+    queued_actions = live_execution_manager.list_queued_for_campaign(campaign.campaign_id)
+    assert len(queued_actions) == 1
+    assert queued_actions[0].source_batch_id == batches[0].batch_id
+    assert queued_actions[0].source_prepared_item_id
+    assert queued_actions[0].source_plan_artifact_id == batches[0].source_plan_artifact_id
 
 
 def test_telegram_app_service_records_one_assistant_reply_per_turn(tmp_path) -> None:

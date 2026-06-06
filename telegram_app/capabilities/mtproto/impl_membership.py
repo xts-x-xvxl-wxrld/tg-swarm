@@ -73,7 +73,12 @@ class MembershipCapabilityImpl:
         if not can_join:
             result = CapabilityResult(
                 success=False,
-                data={"account_id": account_id, "community_id": community_id, "source": "telethon"},
+                data={
+                    "account_id": account_id,
+                    "community_id": community_id,
+                    "outcome_code": _derive_membership_block_code(reason),
+                    "source": "telethon",
+                },
                 audit={"implementation": "mtproto_membership_capability", "action": "join"},
                 error=reason,
             )
@@ -84,7 +89,12 @@ class MembershipCapabilityImpl:
         if not available:
             result = CapabilityResult(
                 success=False,
-                data={"account_id": account_id, "community_id": community_id, "source": "telethon"},
+                data={
+                    "account_id": account_id,
+                    "community_id": community_id,
+                    "outcome_code": "telethon_unavailable",
+                    "source": "telethon",
+                },
                 audit={"implementation": "mtproto_membership_capability", "action": "join"},
                 error=error,
             )
@@ -106,6 +116,7 @@ class MembershipCapabilityImpl:
                         "account_id": account_id,
                         "community_id": community_id,
                         "attempts": attempt,
+                        "outcome_code": "success",
                         "source": "telethon",
                     },
                     audit={"implementation": "mtproto_membership_capability", "action": "join"},
@@ -123,6 +134,7 @@ class MembershipCapabilityImpl:
                             "community_id": community_id,
                             "already_member": True,
                             "attempts": attempt,
+                            "outcome_code": error.code,
                             "source": "telethon",
                         },
                         audit={"implementation": "mtproto_membership_capability", "action": "join"},
@@ -147,6 +159,7 @@ class MembershipCapabilityImpl:
                         "account_id": account_id,
                         "community_id": community_id,
                         "attempts": attempt,
+                        "outcome_code": error.code,
                         "wait_seconds": error.wait_seconds,
                         "source": "telethon",
                     },
@@ -158,7 +171,12 @@ class MembershipCapabilityImpl:
 
         result = CapabilityResult(
             success=False,
-            data={"account_id": account_id, "community_id": community_id, "source": "telethon"},
+            data={
+                "account_id": account_id,
+                "community_id": community_id,
+                "outcome_code": "unexpected_error",
+                "source": "telethon",
+            },
             audit={"implementation": "mtproto_membership_capability", "action": "join"},
             error="Telegram community join failed without a final result.",
         )
@@ -168,6 +186,7 @@ class MembershipCapabilityImpl:
     async def _get_membership_async(self, client: Any, community_id: str) -> dict[str, Any]:
         entity = await client.get_entity(community_id)
         state = "member"
+        community_type = _community_type(entity)
 
         try:
             await client.get_permissions(entity, "me")
@@ -180,15 +199,23 @@ class MembershipCapabilityImpl:
         return {
             "community_id": str(getattr(entity, "id", community_id)),
             "community_name": getattr(entity, "title", "") or getattr(entity, "username", ""),
+            "community_type": community_type,
             "state": state,
         }
 
     async def _join_async(self, client: Any, community_id: str) -> dict[str, Any]:
+        entity = await client.get_entity(community_id)
+        community_type = _community_type(entity)
+        if community_type == "channel":
+            raise ChannelJoinDeferredError(
+                "Broadcast channel joins are deferred in this version. Use groups/supergroups for live join testing."
+            )
         from telethon.tl.functions.channels import JoinChannelRequest
 
-        result = await client(JoinChannelRequest(channel=community_id))
+        result = await client(JoinChannelRequest(channel=entity))
         return {
             "raw_updates_type": result.__class__.__name__,
+            "community_type": community_type,
         }
 
     def _record_audit_event(self, category: str, result: CapabilityResult) -> None:
@@ -203,3 +230,26 @@ class MembershipCapabilityImpl:
                 "error": result.error,
             },
         )
+
+
+def _derive_membership_block_code(reason: str) -> str:
+    normalized_reason = reason.lower()
+    if "rate-limited" in normalized_reason:
+        return "rate_limited"
+    if "flagged" in normalized_reason:
+        return "account_flagged"
+    if "banned" in normalized_reason:
+        return "account_banned"
+    return "policy_blocked"
+
+
+def _community_type(entity: Any) -> str:
+    if getattr(entity, "broadcast", False):
+        return "channel"
+    if getattr(entity, "megagroup", False):
+        return "supergroup"
+    return "group"
+
+
+class ChannelJoinDeferredError(Exception):
+    """Raised when the runtime is asked to join a broadcast channel in this version."""

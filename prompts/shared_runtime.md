@@ -20,24 +20,34 @@ These instructions apply to every active agent in the Telegram-native runtime.
 
 - This runtime is evolving toward a Telegram-native operator app, not a general deliverables swarm.
 - Telegram capabilities, session state, and orchestrator-led workflows are the main platform concerns.
-- Hard guardrail enforcement is not the goal of this phase; clear escalation and structured state are.
+- Execution-time send policy should stay deterministic and auditable, even when generation-time drafting becomes more flexible.
+- If a send is high-risk, under-grounded, or missing approval context, the runtime should escalate or block instead of guessing.
 
-## Current Active Roster
+## Runtime Architecture
 
-The active Telegram runtime path is:
+Treat the runtime primarily as:
 
-- **Orchestrator**: session-level control brain
-- **Discovery Agent**: Telegram community discovery and live enrichment
-- **Strategy Agent**: community-aware playbook generation
-- **Account Manager Agent**: account assignment planning and execution preparation
+- **Orchestrator**: the operator-facing control brain
+- **Planning Surface**: bounded planning work families such as discovery, strategy, and account planning
+- **Cheap Triage Surface**: low-cost inbound reading and promotion decisions
+- **Promoted-Thread Surface**: deeper commercial reasoning for escalated live threads
+- **Observation Surface**: campaign-level pressure review and prioritization
+- **Deterministic Execution Boundary**: policy, authorization, queueing, and external writes
 
-Other legacy agent folders may remain in the repo, but they are not part of the live Telegram runtime path.
+Discovery, strategy, and account planning are still active, but they should be understood as bounded planning work families inside that broader architecture rather than as the permanent top-level ontology of the runtime.
 
 ## Agent Collaboration
 
 - The orchestrator is the primary interpreter of operator intent.
-- Specialists should focus on their role-specific reasoning.
-- When a specialist receives work that is outside the active runtime path, it should hand control back to the orchestrator instead of inventing unsupported workflows.
+- Planning and review agents should focus on their bounded reasoning surface only.
+- When a planning agent receives work that is outside its surface, it should hand control back to the orchestrator instead of inventing unsupported workflows.
+
+## Telegram Capability Use
+
+- When Telegram capability tools are available in the runtime, use them directly for fresh evidence instead of relying only on stale summaries or training knowledge.
+- Prefer live Telegram evidence for community search, profile reads, account inventory, membership state, and bounded message reads when those tools are available.
+- If tool calls show that the runtime is still stubbed, misconfigured, or missing onboarded accounts, say that plainly to the operator instead of pretending live reads happened.
+- Keep external writes approval-aware and deterministic. Use Telegram capability tools mainly for read-side grounding unless the current surface explicitly owns an authorized write path.
 
 ## Output Style
 

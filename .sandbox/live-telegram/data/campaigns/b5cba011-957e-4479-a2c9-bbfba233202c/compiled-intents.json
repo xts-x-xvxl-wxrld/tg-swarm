@@ -1,0 +1,66 @@
+{
+  "compiled_intents": [
+    {
+      "accepted_at": "2026-05-31T21:11:55.431879+00:00",
+      "ambiguity": "",
+      "application_result": "Queued low-risk action `join_community` for `account_38671210769`.",
+      "applied_at": "2026-05-31T21:11:55.495027+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+      "confidence": 0.97,
+      "created_at": "2026-05-31T21:11:55.426958+00:00",
+      "grounding_refs": [
+        "session:24c54d23-f999-48fa-892a-ea0750366ab0",
+        "campaign:b5cba011-957e-4479-a2c9-bbfba233202c",
+        "workflow_stage:intake",
+        "artifact:018a791f-7fc1-4ca6-88db-06498e42ab98"
+      ],
+      "intent_id": "44d1facd-e75b-4abf-a79e-60524f7083ad",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "join_community",
+        "community_id": "swarmtest2"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Join @swarmtest2 \u2014 not yet a member, eligible supergroup within sandbox scope.",
+      "updated_at": "2026-05-31T21:11:55.495051+00:00"
+    },
+    {
+      "accepted_at": "2026-05-31T21:11:55.536447+00:00",
+      "ambiguity": "",
+      "application_result": "Queued low-risk action `join_community` for `account_38671210769`.",
+      "applied_at": "2026-05-31T21:11:55.593821+00:00",
+      "blocked_at": null,
+      "blocked_reason": "",
+      "campaign_id": "b5cba011-957e-4479-a2c9-bbfba233202c",
+      "confidence": 0.97,
+      "created_at": "2026-05-31T21:11:55.427061+00:00",
+      "grounding_refs": [
+        "session:24c54d23-f999-48fa-892a-ea0750366ab0",
+        "campaign:b5cba011-957e-4479-a2c9-bbfba233202c",
+        "workflow_stage:intake",
+        "artifact:018a791f-7fc1-4ca6-88db-06498e42ab98"
+      ],
+      "intent_id": "0fd16597-5f47-4f87-b2e1-dfd3f22f8d20",
+      "kind": "live_action.enqueue_low_risk",
+      "payload": {
+        "account_id": "account_38671210769",
+        "action_type": "join_community",
+        "community_id": "swarmtest3"
+      },
+      "rejected_at": null,
+      "rejection_reason": "",
+      "safety_class": "execution_adjacent",
+      "source_role": "orchestrator",
+      "status": "applied",
+      "summary": "Join @swarmtest3 \u2014 not yet a member, eligible supergroup within sandbox scope.",
+      "updated_at": "2026-05-31T21:11:55.593845+00:00"
+    }
+  ]
+}

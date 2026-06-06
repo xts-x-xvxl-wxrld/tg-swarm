@@ -8,8 +8,10 @@ from uuid import uuid4
 
 from telegram_app.auth import AuthManager
 from telegram_app.approvals import ApprovalManager
+from telegram_app.campaign_assets import CampaignAssetIntakeCoordinator
 from telegram_app.campaigns import CampaignManager
 from telegram_app.capabilities import AccountCapability
+from telegram_app.continuous_ops import ContinuousOpsManager
 from telegram_app.intake import StructuredIntakeCoordinator, get_campaign_brief_artifact
 from telegram_app.monitoring import (
     NullRuntimeEventLogger,
@@ -18,8 +20,9 @@ from telegram_app.monitoring import (
     build_trace_context,
 )
 from telegram_app.models import ApprovalRecord, SessionRecord
+from telegram_app.operator_notifications import OperatorInterventionManager
 from telegram_app.sessions import SessionManager
-from telegram_app.transport.telegram_responses import TelegramResponse
+from telegram_app.transport.telegram_responses import TelegramMessage, TelegramResponse
 from telegram_app.transport.telegram_updates import TelegramUpdate
 
 
@@ -45,18 +48,24 @@ class TelegramAppService:
         approval_manager: ApprovalManager,
         orchestrator: OrchestratorTurnHandler,
         intake_coordinator: StructuredIntakeCoordinator | None = None,
+        asset_intake_coordinator: CampaignAssetIntakeCoordinator | None = None,
         auth_manager: AuthManager | None = None,
         account_capability: AccountCapability | None = None,
         campaign_manager: CampaignManager | None = None,
+        intervention_manager: OperatorInterventionManager | None = None,
+        continuous_ops_manager: ContinuousOpsManager | None = None,
         monitor: RuntimeEventLogger | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._approval_manager = approval_manager
         self._orchestrator = orchestrator
         self._intake_coordinator = intake_coordinator or StructuredIntakeCoordinator(session_manager)
+        self._asset_intake_coordinator = asset_intake_coordinator or CampaignAssetIntakeCoordinator(session_manager)
         self._auth_manager = auth_manager
         self._account_capability = account_capability
         self._campaign_manager = campaign_manager
+        self._intervention_manager = intervention_manager
+        self._continuous_ops_manager = continuous_ops_manager
         self._monitor = monitor or NullRuntimeEventLogger()
 
     @property
@@ -136,6 +145,14 @@ class TelegramAppService:
             session = self._resolve_session(update)
             self._ensure_session_campaign(session)
             update_for_turn = self._normalize_update_text(self._prepare_turn_update(update))
+            intake_message = update_for_turn.text
+            asset_result = self._asset_intake_coordinator.ingest_operator_update(session, update_for_turn)
+            direct_asset_note = ""
+            if asset_result.labeling_note and not update_for_turn.attachments:
+                intake_message = ""
+                direct_asset_note = asset_result.labeling_note
+            if not update_for_turn.text and asset_result.operator_message:
+                update_for_turn = replace(update_for_turn, text=asset_result.operator_message)
             trace_context = trace_context.with_session(session)
             starting_stage = self._session_manager.get_workflow_snapshot(session).stage.value
             trace_context = trace_context.with_stage(starting_stage)
@@ -149,7 +166,15 @@ class TelegramAppService:
                 payload={"started_new_session": update.command == "/new"},
             )
 
-            if update.command == "/new" and not update_for_turn.text:
+            if self._is_intervention_show_request(update_for_turn):
+                response = self._build_intervention_report_response(update.chat_id, session)
+                return self._finalize_response(response, trace_context=trace_context, session=session)
+
+            if self._is_intervention_ack_request(update_for_turn):
+                response = self._acknowledge_interventions(update.chat_id, session)
+                return self._finalize_response(response, trace_context=trace_context, session=session)
+
+            if update.command == "/new" and not update_for_turn.text and not update_for_turn.attachments:
                 response = TelegramResponse.single(
                     update.chat_id,
                     "New session started. What would you like to work on?",
@@ -171,12 +196,20 @@ class TelegramAppService:
                 update=update_for_turn,
                 payload={"pending_approval_present": pending_approval is not None},
             )
+            if direct_asset_note:
+                if self._campaign_manager is not None:
+                    self._campaign_manager.sync_session_memory(session)
+                self._refresh_continuous_ops(session)
+                self._session_manager.save_session(session)
+                response = TelegramResponse.single(update.chat_id, direct_asset_note)
+                return self._finalize_response(response, trace_context=trace_context, session=session)
 
             intake_stage_before = self._session_manager.get_workflow_snapshot(session).stage.value
             self._intake_coordinator.ingest_operator_turn(
                 session=session,
-                message=update_for_turn.text,
+                message=intake_message,
                 pending_approval=pending_approval,
+                source_message_id=update_for_turn.message_id,
             )
             intake_stage_after = self._session_manager.get_workflow_snapshot(session).stage.value
             self._record_stage_transition(
@@ -190,6 +223,7 @@ class TelegramAppService:
             self._sync_session_campaign_goal(session)
             if self._campaign_manager is not None:
                 self._campaign_manager.sync_session_memory(session)
+            self._refresh_continuous_ops(session)
             trace_context = trace_context.with_stage(intake_stage_after)
             response = self._orchestrator.handle_turn(
                 session=session,
@@ -199,6 +233,7 @@ class TelegramAppService:
             )
             if self._campaign_manager is not None:
                 self._campaign_manager.sync_session_memory(session)
+            self._refresh_continuous_ops(session)
             self._session_manager.save_session(session)
 
             final_stage = self._session_manager.get_workflow_snapshot(session).stage.value
@@ -273,6 +308,58 @@ class TelegramAppService:
 
         self._campaign_manager.update_primary_goal(session.campaign_id, primary_goal)
 
+    def _refresh_continuous_ops(self, session: SessionRecord) -> None:
+        """Keep the campaign-owned continuous-ops summary fresh during turns."""
+        if self._continuous_ops_manager is None:
+            return
+        self._continuous_ops_manager.refresh_for_session(session)
+
+    def _build_intervention_report_response(
+        self,
+        chat_id: str,
+        session: SessionRecord,
+    ) -> TelegramResponse:
+        """Return the current unresolved intervention summary for the attached campaign."""
+        if self._intervention_manager is None or not session.campaign_id:
+            return TelegramResponse.single(chat_id, "Operator intervention reporting is not available in this runtime yet.")
+        self._refresh_continuous_ops(session)
+        interventions = self._intervention_manager.list_open_for_campaign(
+            session.campaign_id,
+            include_acknowledged=True,
+        )
+        text = self._intervention_manager.build_alert_message(
+            session.campaign_id,
+            interventions,
+            include_footer=False,
+        )
+        self._intervention_manager.mark_delivered(
+            session.campaign_id,
+            [intervention.intervention_id for intervention in interventions],
+        )
+        response = TelegramResponse.single(chat_id, text)
+        response.metadata["skip_intervention_append"] = True
+        return response
+
+    def _acknowledge_interventions(
+        self,
+        chat_id: str,
+        session: SessionRecord,
+    ) -> TelegramResponse:
+        """Acknowledge all currently open interventions for the attached campaign."""
+        if self._intervention_manager is None or not session.campaign_id:
+            return TelegramResponse.single(chat_id, "Operator intervention acknowledgements are not available in this runtime yet.")
+        acknowledged = self._intervention_manager.acknowledge_all_for_campaign(session.campaign_id)
+        if acknowledged < 1:
+            response = TelegramResponse.single(chat_id, "There are no open operator interventions to acknowledge right now.")
+            response.metadata["skip_intervention_append"] = True
+            return response
+        response = TelegramResponse.single(
+            chat_id,
+            f"Acknowledged {acknowledged} operator intervention(s). I will keep them quiet until something changes.",
+        )
+        response.metadata["skip_intervention_append"] = True
+        return response
+
     def _prepare_turn_update(self, update: TelegramUpdate) -> TelegramUpdate:
         """Normalize `/new` turns so optional inline goal text becomes the message body."""
         if update.command != "/new":
@@ -326,6 +413,8 @@ class TelegramAppService:
             join_count = account.get("join_count_24h", 0)
             rate_limit_until = str(account.get("rate_limit_until", "")).strip() or "none"
             last_active = str(account.get("last_active", "")).strip() or "unknown"
+            warmup_day = account.get("warmup_day")
+            warmup_stage = str(account.get("warmup_stage", "")).strip() or "unknown"
             metadata = account.get("metadata", {})
             recent_rate_limit = "none"
             if isinstance(metadata, dict):
@@ -333,7 +422,7 @@ class TelegramAppService:
                 if isinstance(recent_rate_limit_payload, dict):
                     recent_rate_limit = str(recent_rate_limit_payload.get("recorded_at", "")).strip() or "none"
             lines.append(
-                f"- `{account_id}` | health: {health} | joins24h: {join_count} | rate_limit_until: {rate_limit_until} | recent_rate_limit: {recent_rate_limit} | last_active: {last_active}"
+                f"- `{account_id}` | health: {health} | warmup: day {warmup_day or '?'} ({warmup_stage}) | joins24h: {join_count} | rate_limit_until: {rate_limit_until} | recent_rate_limit: {recent_rate_limit} | last_active: {last_active}"
             )
         return TelegramResponse.single(update.chat_id, "\n".join(lines))
 
@@ -345,6 +434,8 @@ class TelegramAppService:
         session: SessionRecord | None = None,
     ) -> TelegramResponse:
         response.metadata["trace_id"] = trace_context.trace_id
+        if session is not None and not response.metadata.get("skip_intervention_append"):
+            self._append_intervention_messages(response, session)
         if session is not None and not self._response_already_recorded(session, response):
             self._session_manager.record_app_response(session, response)
         self._monitor.record_event(
@@ -359,6 +450,32 @@ class TelegramAppService:
             },
         )
         return response
+
+    def _append_intervention_messages(
+        self,
+        response: TelegramResponse,
+        session: SessionRecord,
+    ) -> None:
+        """Append newly surfaced operator interventions to the outbound response."""
+        if self._intervention_manager is None or not session.campaign_id:
+            return
+
+        deliverable = self._intervention_manager.list_deliverable_for_campaign(session.campaign_id)
+        if not deliverable:
+            return
+
+        response.messages.append(
+            TelegramMessage(
+                text=self._intervention_manager.build_alert_message(
+                    session.campaign_id,
+                    deliverable[:3],
+                )
+            )
+        )
+        self._intervention_manager.mark_delivered(
+            session.campaign_id,
+            [record.intervention_id for record in deliverable[:3]],
+        )
 
     def _record_stage_transition(
         self,
@@ -406,3 +523,15 @@ class TelegramAppService:
             if recorded_text != message_text:
                 return False
         return True
+
+    def _is_intervention_show_request(self, update: TelegramUpdate) -> bool:
+        if update.command == "/alerts":
+            return True
+        normalized = update.text.lower().strip()
+        return normalized in {"alerts", "show alerts", "show alert", "show interventions"}
+
+    def _is_intervention_ack_request(self, update: TelegramUpdate) -> bool:
+        if update.command == "/ackalerts":
+            return True
+        normalized = update.text.lower().strip()
+        return normalized in {"ack alerts", "acknowledge alerts", "dismiss alerts"}

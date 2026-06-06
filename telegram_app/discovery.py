@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from telegram_app.approvals import ApprovalManager
@@ -16,6 +15,7 @@ from telegram_app.models import (
     WorkflowStage,
 )
 from telegram_app.sessions import SessionManager
+from telegram_app.workflow_validation import parse_marked_json_block, strip_marked_block
 
 DISCOVERY_JSON_MARKER = "DISCOVERY_SHORTLIST_JSON"
 COMMUNITY_SHORTLIST_TITLE = "Community shortlist"
@@ -64,36 +64,18 @@ def build_discovery_runtime_instructions(session: SessionRecord) -> str:
 
 def parse_discovery_shortlist(final_output: str) -> dict[str, Any] | None:
     """Extract the structured discovery shortlist payload from final output."""
-    if DISCOVERY_JSON_MARKER not in final_output:
+    payload = parse_marked_json_block(final_output, DISCOVERY_JSON_MARKER)
+    if not isinstance(payload, dict):
         return None
-
-    _, _, remainder = final_output.partition(DISCOVERY_JSON_MARKER)
-    remainder = remainder.strip()
-    if remainder.startswith("```json"):
-        remainder = remainder[len("```json") :].strip()
-    elif remainder.startswith("```"):
-        remainder = remainder[len("```") :].strip()
-
-    if remainder.endswith("```"):
-        remainder = remainder[:-3].strip()
-
-    try:
-        payload = json.loads(remainder)
-    except json.JSONDecodeError:
-        return None
-
     communities = payload.get("communities")
-    if not isinstance(payload, dict) or not isinstance(communities, list) or not communities:
+    if not isinstance(communities, list) or not communities:
         return None
     return payload
 
 
 def strip_discovery_json_block(final_output: str) -> str:
     """Remove the machine-readable discovery block before sending text to Telegram."""
-    if DISCOVERY_JSON_MARKER not in final_output:
-        return final_output.strip()
-    operator_text, _, _ = final_output.partition(DISCOVERY_JSON_MARKER)
-    return operator_text.strip()
+    return strip_marked_block(final_output, DISCOVERY_JSON_MARKER)
 
 
 def persist_discovery_shortlist(

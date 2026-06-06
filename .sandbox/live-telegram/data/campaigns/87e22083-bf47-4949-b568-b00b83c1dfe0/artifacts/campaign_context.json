@@ -1,0 +1,33 @@
+{
+  "artifact_id": "3fe270a5-7b5a-44cf-8ce5-2b36ec8311fa",
+  "created_at": "2026-05-31T15:27:57.949824+00:00",
+  "data": {
+    "execution_constraints": [
+      "Goal: test our Telegram runtime in a private sandbox first, then against our own public Telegram test spaces only. Use these as seed targets:",
+      "Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies.",
+      "- Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog",
+      "Queue one outbound sandbox group message into @swarmtestgroup from one joined account saying exactly: \"Single-send safety check from SwarmKit \u2014 this message should appear once only.\"",
+      "Do not retry or enqueue another outbound send if Telegram reports an ambiguous transient failure. In that case, report uncertain delivery instead.",
+      "Queue one outbound sandbox message into @DTOMTESTCHANNE from one joined account saying exactly: \"Single-send channel safety check from SwarmKit \u2014 this should appear once only.\""
+    ],
+    "open_ambiguities": [
+      "can we speed up the joins so they happen immediately?",
+      "which account did you use and where did you send it?"
+    ],
+    "operator_preferences": [
+      "Please inspect them, use them as initial discovery anchors, and keep all activity limited to our test spaces."
+    ],
+    "persistent_decisions": [],
+    "revision_threads": [],
+    "voice_profile": {
+      "avoid_traits": [],
+      "cta_preferences": [],
+      "preferred_traits": [],
+      "style_notes": []
+    }
+  },
+  "kind": "campaign_context",
+  "summary": "Campaign context tracks 1 operator preferences, 6 execution constraints, 2 open ambiguities.",
+  "title": "Campaign context profile",
+  "updated_at": "2026-05-31T20:50:26.600733+00:00"
+}

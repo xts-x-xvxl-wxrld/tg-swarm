@@ -5,21 +5,61 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-import os
 from pathlib import Path
 import string
 
 import anthropic
 
+from telegram_app.agent_runtime import AgentRuntimeBroker
+from telegram_app.campaign_memory.operational_notes import NEXT_ACTIONS_DESTINATION
+from telegram_app.campaign_context import (
+    CAMPAIGN_CONTEXT_TITLE,
+    build_campaign_context_summary,
+    get_campaign_context_artifact,
+    merge_campaign_context_data,
+    promote_campaign_context_revision,
+    resolve_campaign_context_revision,
+)
+from telegram_app.campaign_setup import get_campaign_setup_state, setup_is_confirmed
+from telegram_app.campaign_signals import (
+    OBSERVATION_OWNER_ROLE,
+    OBSERVATION_WORK_TYPE,
+    CampaignSignalRecord,
+    CampaignSignalManager,
+    ObservationOperatorAttention,
+    ObservationRecommendedNextStep,
+    ObservationReviewResult,
+    ObservationSuggestedWorkItemChange,
+    ObservationWorkItemChangeAction,
+    ObservationWorkItemType,
+    ObservationWorkRefresher,
+)
 from telegram_app.capabilities import (
     AccountCapability,
     CommunityCapability,
     MembershipCapability,
     MessagingCapability,
 )
+from telegram_app.compiled_intents import (
+    CompiledIntentApplicator,
+    CompiledIntentApplicationError,
+    CompiledIntentStatus,
+    CompiledIntentStore,
+    compile_campaign_context_update,
+    compile_live_ops_intents,
+    compile_memory_note,
+    compile_output_proposals,
+    compile_prepared_execution_invalidation,
+    compile_review_request,
+    compile_schedule_action,
+    compile_specialist_proposals,
+    compile_work_intent,
+    validate_compiled_intent,
+)
 from telegram_app.app_service import OrchestratorTurnHandler
 from telegram_app.approvals import ApprovalManager
 from telegram_app.campaigns import CampaignManager
+from telegram_app.continuous_ops import ContinuousOpsManager
 from telegram_app.discovery import (
     parse_discovery_shortlist,
     persist_discovery_shortlist,
@@ -27,6 +67,7 @@ from telegram_app.discovery import (
     strip_discovery_json_block,
 )
 from telegram_app.intake import get_campaign_brief_artifact, get_workflow_snapshot
+from telegram_app.llm import TelegramCapabilityToolbox, resolve_model
 from telegram_app.monitoring import NullRuntimeEventLogger, RuntimeEventLogger, RuntimeTraceContext
 from telegram_app.models import (
     ApprovalRecord,
@@ -44,10 +85,18 @@ from telegram_app.models import (
     WorkflowStage,
 )
 from telegram_app.orchestrator.context_builder import build_runtime_context
+from telegram_app.orchestrator.reasoning_surfaces import reasoning_surface_for_work_type
+from telegram_app.prepared_execution import PreparedExecutionService
+from telegram_app.live_ops import LiveOpsIntentKind, LiveOpsService
 from telegram_app.scheduling import ScheduleManager
 from telegram_app.sessions import SessionManager
 from telegram_app.transport import TelegramResponse, TelegramUpdate
-from telegram_app.workflow_validation import parse_marked_json_block, validate_schedule_action
+from telegram_app.workflow_validation import (
+    OUTPUT_PROPOSALS_JSON_MARKER,
+    parse_output_proposal_list,
+    strip_marked_block,
+    validate_schedule_action,
+)
 from telegram_app.work_items import WorkItemManager
 
 logger = logging.getLogger(__name__)
@@ -60,6 +109,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _APPROVAL_PHRASES = ("go ahead", "sounds good", "looks good", "let's go", "move on", "move forward")
 _REJECTION_PHRASES = ("not quite", "not good", "try again", "start over", "not right")
+_ACTIVATION_PHRASES = ("start execution", "launch execution", "activate plan", "activate execution")
 _REVISION_REQUEST_PHRASES = (
     "search a little more",
     "search more",
@@ -71,16 +121,41 @@ _REVISION_REQUEST_PHRASES = (
     "adjust the criteria",
     "change the criteria",
 )
-_APPROVAL_WORDS = frozenset(
-    {"yes", "approve", "approved", "ok", "okay", "confirmed", "confirm", "proceed", "go", "sure", "perfect", "great", "continue"}
+_REVISION_FEEDBACK_PHRASES = _REVISION_REQUEST_PHRASES + (
+    "tighten",
+    "loosen",
+    "adjust",
+    "change",
+    "revise",
+    "refresh",
+    "update",
+    "remove",
+    "add",
+    "avoid",
+    "keep",
+    "focus on",
+    "lean into",
+    "make it",
+    "make this",
+    "less ",
+    "more ",
 )
-_REJECTION_WORDS = frozenset({"no", "reject", "rejected", "change", "revise", "revision", "redo", "modify", "different", "nope", "nah"})
+_APPROVAL_WORDS = frozenset(
+    {"yes", "approve", "approved", "ok", "okay", "confirmed", "confirm", "proceed", "sure", "continue"}
+)
+_REJECTION_WORDS = frozenset({"no", "reject", "rejected", "revise", "revision", "redo", "modify", "different", "nope", "nah"})
 SHORTLIST_APPROVAL_CATEGORY = "community_shortlist"
 STRATEGY_APPROVAL_CATEGORY = "strategy_playbook"
 ACCOUNT_PLAN_APPROVAL_CATEGORY = "account_assignment_plan"
 DISCOVERY_WORK_TYPE = "discovery"
 STRATEGY_WORK_TYPE = "strategy"
 ACCOUNT_PLANNING_WORK_TYPE = "account_planning"
+OPEN_WORK_ITEM_STATUSES = {
+    WorkItemStatus.PENDING,
+    WorkItemStatus.IN_PROGRESS,
+    WorkItemStatus.REVIEW_PENDING,
+    WorkItemStatus.ESCALATED,
+}
 WORK_TYPE_TO_STAGE = {
     DISCOVERY_WORK_TYPE: WorkflowStage.DISCOVERY,
     STRATEGY_WORK_TYPE: WorkflowStage.STRATEGY,
@@ -91,14 +166,16 @@ WORK_TYPE_TO_OWNER_ROLE = {
     DISCOVERY_WORK_TYPE: "discovery",
     STRATEGY_WORK_TYPE: "strategy",
     ACCOUNT_PLANNING_WORK_TYPE: "account_manager",
+    OBSERVATION_WORK_TYPE: OBSERVATION_OWNER_ROLE,
 }
 WORK_TYPE_TO_DEFAULT_GOAL = {
     DISCOVERY_WORK_TYPE: "Produce or refresh a shortlist of Telegram communities that match the current campaign brief.",
     STRATEGY_WORK_TYPE: "Turn the approved community shortlist into a campaign strategy playbook.",
     ACCOUNT_PLANNING_WORK_TYPE: "Turn the approved strategy playbook into an account assignment plan.",
+    OBSERVATION_WORK_TYPE: "Review unresolved campaign signals that may require planning or posture changes.",
 }
 _VALIDATED_DISCOVERY_STATES = frozenset({"live_confirmed", "search_confirmed"})
-SCHEDULE_ACTION_JSON_MARKER = "SCHEDULE_ACTION_JSON"
+OBSERVATION_SIGNAL_DIGEST_LIMIT = 8
 
 
 @dataclass(slots=True)
@@ -112,28 +189,37 @@ class ScheduledExecutionOutcome:
 
 
 @dataclass(slots=True)
-class SpecialistRoute:
+class ReasoningSurfaceRoute:
     """Normalized work-family route for the current turn."""
 
     work_type: str
+    reasoning_surface: str
     work_item: WorkItemRecord | None = None
     review_pending: bool = False
+
+
+@dataclass(slots=True)
+class FollowOnDecision:
+    """Deterministic next-step decision after a planning review is accepted."""
+
+    work_type: str
+    work_item: WorkItemRecord | None = None
+    action: str = "run"
+    summary: str = ""
+
+
+@dataclass(slots=True)
+class ObservationExecutionOutcome:
+    """Result of one bounded observation execution path."""
+
+    work_item: WorkItemRecord | None
+    operator_text: str = ""
 
 
 def _load_prompt(name: str) -> str:
     """Load a prompt from the prompts/ directory at the repo root."""
     path = REPO_ROOT / "prompts" / name
     return path.read_text(encoding="utf-8")
-
-
-def _resolve_model() -> str:
-    """Resolve the Anthropic model to use, falling back to claude-sonnet-4-6."""
-    model = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6").strip()
-    if "/" in model:
-        model = model.split("/", 1)[1]
-    if not model.startswith("claude-"):
-        model = "claude-sonnet-4-6"
-    return model
 
 
 def _build_messages(
@@ -199,6 +285,33 @@ def _classify_approval_response(text: str) -> bool | None:
     return None
 
 
+def _is_activation_request(text: str) -> bool:
+    """Return whether the operator is explicitly trying to activate execution."""
+    import re
+
+    normalized = text.lower().strip().strip(".,!?")
+    if not normalized:
+        return False
+    if normalized.endswith("?"):
+        return False
+    if re.match(r"^(please\s+)?(activate|launch)\b", normalized):
+        return True
+    return any(
+        re.match(rf"^(please\s+)?{phrase}\b", normalized)
+        for phrase in _ACTIVATION_PHRASES
+    )
+
+
+def _looks_like_revision_feedback(text: str) -> bool:
+    """Return whether review-turn text is asking for a revision instead of a routing reply."""
+    normalized = text.lower().strip()
+    if not normalized:
+        return False
+    if normalized.endswith("?") and not any(phrase in normalized for phrase in _REVISION_FEEDBACK_PHRASES):
+        return False
+    return any(phrase in normalized for phrase in _REVISION_FEEDBACK_PHRASES)
+
+
 class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     """Invoke Claude directly via the Anthropic SDK for one Telegram turn."""
 
@@ -213,6 +326,12 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         work_item_manager: WorkItemManager | None = None,
         schedule_manager: ScheduleManager | None = None,
         campaign_manager: CampaignManager | None = None,
+        signal_manager: CampaignSignalManager | None = None,
+        continuous_ops_manager: ContinuousOpsManager | None = None,
+        prepared_execution_service: PreparedExecutionService | None = None,
+        live_ops_service: LiveOpsService | None = None,
+        compiled_intent_store: CompiledIntentStore | None = None,
+        compiled_intent_applicator: CompiledIntentApplicator | None = None,
         monitor: RuntimeEventLogger | None = None,
         allow_live_sends: bool = True,
     ) -> None:
@@ -225,9 +344,35 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         self._work_item_manager = work_item_manager
         self._schedule_manager = schedule_manager
         self._campaign_manager = campaign_manager
+        self._signal_manager = signal_manager
+        self._continuous_ops_manager = continuous_ops_manager
+        self._prepared_execution_service = prepared_execution_service
+        self._live_ops_service = live_ops_service
+        self._compiled_intent_store = compiled_intent_store
+        self._compiled_intent_applicator = compiled_intent_applicator
         self._monitor = monitor or NullRuntimeEventLogger()
         self._allow_live_sends = allow_live_sends
         self._client = anthropic.Anthropic()
+        self._toolbox = TelegramCapabilityToolbox(
+            account_capability=account_capability,
+            community_capability=community_capability,
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+        )
+        self._agent_runtime_broker = AgentRuntimeBroker(
+            work_item_manager=work_item_manager,
+            schedule_manager=schedule_manager,
+            compiled_intent_store=compiled_intent_store,
+            account_capability=account_capability,
+            community_capability=community_capability,
+            membership_capability=membership_capability,
+            messaging_capability=messaging_capability,
+        )
+        self._observation_work_refresher = (
+            ObservationWorkRefresher(signal_manager, work_item_manager)
+            if signal_manager is not None and work_item_manager is not None
+            else None
+        )
 
     def handle_turn(
         self,
@@ -236,11 +381,25 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         pending_approval: ApprovalRecord | None = None,
         trace_context: RuntimeTraceContext | None = None,
     ) -> TelegramResponse:
-        """Run one orchestrator turn, routing to the appropriate specialist."""
+        """Run one orchestrator turn, selecting the best reasoning surface for the turn."""
         operator_message = update.text or ""
-        if self._should_handle_schedule_authoring(operator_message):
-            return self._run_orchestrator_turn(session, update, pending_approval)
-        route = self._resolve_specialist_route(session, pending_approval)
+        if _is_activation_request(operator_message):
+            return self._handle_plan_activation_turn(session, update)
+        route = self._resolve_reasoning_surface_route(session, pending_approval)
+        direct_control_response = self._handle_direct_operator_control(
+            session,
+            update,
+            operator_message=operator_message,
+            route=route,
+            pending_approval=pending_approval,
+        )
+        if direct_control_response is not None:
+            return direct_control_response
+        self._promote_general_operator_context(
+            session,
+            operator_message,
+            source_message_id=update.message_id,
+        )
 
         if route is not None and route.work_type == DISCOVERY_WORK_TYPE:
             if route.review_pending:
@@ -285,7 +444,487 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 trace_context=trace_context,
             )
 
+        if route is not None and route.work_type == OBSERVATION_WORK_TYPE:
+            return self._run_operator_observation_turn(
+                session,
+                update,
+                operator_message=operator_message,
+                work_item=route.work_item,
+            )
+
         return self._run_orchestrator_turn(session, update, pending_approval)
+
+    def _live_ops_conflicts_with_planning_review(
+        self,
+        intent_kind: LiveOpsIntentKind,
+        route: ReasoningSurfaceRoute | None,
+        operator_message: str,
+    ) -> bool:
+        if route is None or not route.review_pending:
+            return False
+        if intent_kind not in {LiveOpsIntentKind.UPDATE_VOICE, LiveOpsIntentKind.UPDATE_SAFEGUARD}:
+            return False
+        return _looks_like_revision_feedback(operator_message)
+
+    def _handle_direct_operator_control(
+        self,
+        session: SessionRecord,
+        update: TelegramUpdate,
+        *,
+        operator_message: str,
+        route: ReasoningSurfaceRoute | None,
+        pending_approval: ApprovalRecord | None,
+    ) -> TelegramResponse | None:
+        live_ops_intents = (
+            self._live_ops_service.detect_intents(operator_message)
+            if self._live_ops_service is not None
+            else []
+        )
+        compileable_live_ops_intents = [
+            intent
+            for intent in live_ops_intents
+            if self._is_compileable_live_ops_intent(intent.kind)
+        ]
+        direct_schedule_intent = self._compile_direct_schedule_intent(session, operator_message)
+
+        if not compileable_live_ops_intents and direct_schedule_intent is None:
+            if live_ops_intents:
+                response_text = self._live_ops_service.handle_intent(
+                    session,
+                    live_ops_intents[0],
+                    operator_id=session.operator_id,
+                )
+                return TelegramResponse.single(update.chat_id, response_text)
+            if self._should_handle_schedule_authoring(operator_message):
+                return self._run_orchestrator_turn(session, update, pending_approval)
+            return None
+
+        if any(
+            self._live_ops_conflicts_with_planning_review(intent.kind, route, operator_message)
+            for intent in compileable_live_ops_intents
+        ):
+            return TelegramResponse.single(
+                update.chat_id,
+                "Do you want me to apply that as a live reply control for the campaign, or revise the current planning draft?",
+            )
+
+        if self._compiled_intent_store is None or self._compiled_intent_applicator is None:
+            self._promote_general_operator_context(
+                session,
+                operator_message,
+                source_message_id=update.message_id,
+            )
+            if direct_schedule_intent is not None:
+                return self._run_orchestrator_turn(session, update, pending_approval)
+            response_text = "\n\n".join(
+                self._live_ops_service.handle_intent(
+                    session,
+                    intent,
+                    operator_id=session.operator_id,
+                )
+                for intent in compileable_live_ops_intents
+            )
+            return TelegramResponse.single(update.chat_id, response_text)
+
+        self._promote_general_operator_context(
+            session,
+            operator_message,
+            source_message_id=update.message_id,
+        )
+
+        compiled_intents = []
+        if session.campaign_id and compileable_live_ops_intents:
+            compiled_intents.extend(
+                compile_live_ops_intents(
+                    session.campaign_id,
+                    compileable_live_ops_intents,
+                    source_role="orchestrator",
+                    operator_id=session.operator_id,
+                    grounding_refs=self._build_control_grounding_refs(session),
+                )
+            )
+        if direct_schedule_intent is not None:
+            compiled_intents.append(direct_schedule_intent)
+
+        if not compiled_intents:
+            return None
+
+        response_lines: list[str] = []
+        for compiled_intent in compiled_intents:
+            result = self._apply_persisted_compiled_intent(session, compiled_intent)
+            response_lines.append(result)
+
+        self._refresh_continuous_ops(session=session)
+        response_text = "\n\n".join(line for line in response_lines if line.strip())
+        return TelegramResponse.single(update.chat_id, response_text)
+
+    def _is_compileable_live_ops_intent(self, intent_kind: LiveOpsIntentKind) -> bool:
+        return intent_kind in {
+            LiveOpsIntentKind.APPROVE_REVIEW,
+            LiveOpsIntentKind.DISMISS_REVIEW,
+            LiveOpsIntentKind.PAUSE_SCOPE,
+            LiveOpsIntentKind.RESUME_SCOPE,
+            LiveOpsIntentKind.SET_POSTURE,
+            LiveOpsIntentKind.UPDATE_VOICE,
+            LiveOpsIntentKind.UPDATE_SAFEGUARD,
+        }
+
+    def _compile_direct_schedule_intent(
+        self,
+        session: SessionRecord,
+        operator_message: str,
+    ):
+        if not session.campaign_id or not self._should_handle_schedule_authoring(operator_message):
+            return None
+
+        normalized = operator_message.lower().strip()
+        action = ""
+        if "pause" in normalized:
+            action = "pause"
+        elif "resume" in normalized:
+            action = "resume"
+        else:
+            action = "create"
+
+        work_type = self._infer_schedule_work_type(operator_message, action=action, session=session)
+        if not work_type:
+            return None
+
+        schedule_payload: dict[str, object] = {"work_type": work_type}
+        owner_role = WORK_TYPE_TO_OWNER_ROLE.get(work_type, "")
+        if owner_role:
+            schedule_payload["owner_role"] = owner_role
+
+        if action == "create":
+            interval_minutes = self._extract_schedule_interval_minutes(normalized)
+            if interval_minutes is None:
+                return None
+            schedule_payload.update(
+                {
+                    "goal": self._build_stage_goal(session, work_type),
+                    "interval_minutes": interval_minutes,
+                    "constraints": self._build_stage_constraints(session),
+                    "priority": self._extract_schedule_priority(normalized).value,
+                }
+            )
+
+        return compile_schedule_action(
+            session.campaign_id,
+            {"action": action, "schedule": schedule_payload},
+            source_role="orchestrator",
+            grounding_refs=self._build_schedule_grounding_refs(session),
+        )
+
+    def _infer_schedule_work_type(
+        self,
+        operator_message: str,
+        *,
+        action: str,
+        session: SessionRecord,
+    ) -> str:
+        normalized = operator_message.lower()
+        for token, work_type in (
+            ("account planning", ACCOUNT_PLANNING_WORK_TYPE),
+            ("account plan", ACCOUNT_PLANNING_WORK_TYPE),
+            ("assignment plan", ACCOUNT_PLANNING_WORK_TYPE),
+            ("strategy", STRATEGY_WORK_TYPE),
+            ("playbook", STRATEGY_WORK_TYPE),
+            ("observation", OBSERVATION_WORK_TYPE),
+            ("signal review", OBSERVATION_WORK_TYPE),
+            ("discovery", DISCOVERY_WORK_TYPE),
+            ("shortlist", DISCOVERY_WORK_TYPE),
+        ):
+            if token in normalized:
+                return work_type
+
+        if not session.campaign_id or self._schedule_manager is None or action not in {"pause", "resume"}:
+            return ""
+
+        target_status = {ScheduleStatus.ACTIVE} if action == "pause" else {ScheduleStatus.PAUSED}
+        schedules = [
+            schedule
+            for schedule in self._schedule_manager.list_for_campaign(session.campaign_id)
+            if schedule.status in target_status
+        ]
+        if len(schedules) == 1:
+            return schedules[0].work_type
+        return ""
+
+    def _extract_schedule_interval_minutes(self, normalized_message: str) -> int | None:
+        every_match = self._match_every_interval(normalized_message)
+        if every_match is not None:
+            return every_match
+        if "hourly" in normalized_message:
+            return 60
+        if "daily" in normalized_message:
+            return 1440
+        if "weekly" in normalized_message:
+            return 10080
+        if "monthly" in normalized_message:
+            return 43200
+        return None
+
+    def _match_every_interval(self, normalized_message: str) -> int | None:
+        import re
+
+        match = re.search(r"\bevery\s+(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\b", normalized_message)
+        if match is None:
+            return None
+        value = int(match.group(1))
+        unit = match.group(2)
+        multipliers = {
+            "minute": 1,
+            "minutes": 1,
+            "hour": 60,
+            "hours": 60,
+            "day": 1440,
+            "days": 1440,
+            "week": 10080,
+            "weeks": 10080,
+        }
+        return value * multipliers[unit]
+
+    def _extract_schedule_priority(self, normalized_message: str) -> WorkItemPriority:
+        if "low priority" in normalized_message:
+            return WorkItemPriority.LOW
+        if "medium priority" in normalized_message:
+            return WorkItemPriority.MEDIUM
+        return WorkItemPriority.HIGH
+
+    def _build_control_grounding_refs(self, session: SessionRecord) -> list[str]:
+        refs = self._build_schedule_grounding_refs(session)
+        campaign_context = get_campaign_context_artifact(session)
+        if campaign_context is not None:
+            refs.append(f"artifact:{campaign_context.artifact_id}")
+        return refs
+
+    def _apply_persisted_compiled_intent(
+        self,
+        session: SessionRecord,
+        compiled_intent,
+    ) -> str:
+        if self._compiled_intent_store is None:
+            return "Compiled-intent persistence is not available in this runtime yet."
+
+        self._enrich_compiled_intent_with_runtime_context(session, compiled_intent)
+        self._compiled_intent_store.save(compiled_intent)
+        validation_error = validate_compiled_intent(compiled_intent)
+        if validation_error is not None:
+            compiled_intent.mark_rejected(validation_error)
+            self._compiled_intent_store.save(compiled_intent)
+            return "I did not apply that control because the compiled intent was invalid. " + validation_error
+
+        compiled_intent.mark_accepted()
+        self._compiled_intent_store.save(compiled_intent)
+        try:
+            if compiled_intent.kind == "campaign_control.update_context":
+                result = self._apply_campaign_context_compiled_intent(session, compiled_intent)
+            else:
+                if self._compiled_intent_applicator is None:
+                    raise CompiledIntentApplicationError(
+                        "Compiled-intent application is not available in this runtime yet."
+                    )
+                result = self._compiled_intent_applicator.apply(compiled_intent)
+        except CompiledIntentApplicationError as exc:
+            compiled_intent.mark_blocked(str(exc))
+            self._compiled_intent_store.save(compiled_intent)
+            return compiled_intent.blocked_reason
+
+        compiled_intent.mark_applied(result)
+        self._compiled_intent_store.save(compiled_intent)
+        return result
+
+    def _enrich_compiled_intent_with_runtime_context(self, session: SessionRecord, compiled_intent) -> None:
+        if compiled_intent.kind != "live_action.enqueue_operator_send":
+            return
+        if not isinstance(compiled_intent.payload, dict):
+            return
+        operator_id = str(compiled_intent.payload.get("operator_id", "")).strip()
+        if operator_id:
+            return
+        compiled_intent.payload["operator_id"] = session.operator_id
+
+    def _apply_campaign_context_compiled_intent(self, session: SessionRecord, compiled_intent) -> str:
+        self._update_campaign_context_artifact(session, compiled_intent.payload)
+        return "Updated the durable campaign context."
+
+    def _persist_compiled_proposal(self, compiled_intent) -> None:
+        if self._compiled_intent_store is None:
+            return
+        self._compiled_intent_store.save(compiled_intent)
+        validation_error = validate_compiled_intent(compiled_intent)
+        if validation_error is not None:
+            compiled_intent.mark_rejected(validation_error)
+            self._compiled_intent_store.save(compiled_intent)
+            return
+        compiled_intent.mark_accepted()
+        self._compiled_intent_store.save(compiled_intent)
+
+    def _persist_specialist_advisory_proposals(
+        self,
+        session: SessionRecord,
+        *,
+        work_type: str,
+        source_role: str,
+        operator_text: str,
+        artifact: WorkflowArtifact | None,
+        raw_proposals: list[dict[str, object]] | None = None,
+    ) -> None:
+        if artifact is None or self._compiled_intent_store is None or not session.campaign_id:
+            return
+
+        proposal_payloads = [
+            dict(proposal)
+            for proposal in raw_proposals or []
+            if isinstance(proposal, dict)
+        ]
+        if not proposal_payloads:
+            proposal_payloads = self._default_specialist_proposal_payloads(
+                work_type=work_type,
+                operator_text=operator_text,
+                artifact=artifact,
+            )
+
+        compiled_proposals = compile_specialist_proposals(
+            session.campaign_id,
+            proposal_payloads,
+            source_role=source_role,
+            grounding_refs=[
+                *self._build_control_grounding_refs(session),
+                *self._related_refs_for_work_type(session, work_type),
+            ],
+        )
+        for compiled_proposal in compiled_proposals:
+            self._persist_compiled_proposal(compiled_proposal)
+
+    def _latest_compiled_intent(
+        self,
+        session: SessionRecord,
+        *,
+        kind: str,
+        payload_key: str,
+        payload_value: str,
+    ):
+        if self._compiled_intent_store is None or not session.campaign_id:
+            return None
+
+        accepted_statuses = {CompiledIntentStatus.ACCEPTED, CompiledIntentStatus.APPLIED}
+        intents = sorted(
+            self._compiled_intent_store.list_for_campaign(session.campaign_id),
+            key=lambda intent: intent.updated_at,
+            reverse=True,
+        )
+        for intent in intents:
+            if intent.kind != kind or intent.status not in accepted_statuses:
+                continue
+            if str(intent.payload.get(payload_key, "")).strip() != payload_value:
+                continue
+            return intent
+        return None
+
+    def _latest_review_posture(self, session: SessionRecord, work_type: str):
+        return self._latest_compiled_intent(
+            session,
+            kind="planning.review_posture",
+            payload_key="work_type",
+            payload_value=work_type,
+        )
+
+    def _latest_follow_on_recommendation(self, session: SessionRecord, work_type: str):
+        return self._latest_compiled_intent(
+            session,
+            kind="planning.follow_on_recommendation",
+            payload_key="current_work_type",
+            payload_value=work_type,
+        )
+
+    def _latest_execution_state_impact(self, session: SessionRecord, work_type: str):
+        return self._latest_compiled_intent(
+            session,
+            kind="planning.execution_state_impact",
+            payload_key="work_type",
+            payload_value=work_type,
+        )
+
+    def _follow_on_work_type_from_recommendation(
+        self,
+        recommendation,
+        *,
+        completed_work_type: str,
+    ) -> str | None:
+        if recommendation is not None:
+            recommended_action = str(recommendation.payload.get("recommended_action", "")).strip()
+            if recommended_action == "hold":
+                return None
+            recommended_work_type = str(recommendation.payload.get("recommended_next_work_type", "")).strip()
+            if recommended_work_type:
+                return recommended_work_type
+        return self._fallback_follow_on_work_type(completed_work_type)
+
+    def _fallback_follow_on_work_type(self, work_type: str) -> str | None:
+        return {
+            DISCOVERY_WORK_TYPE: STRATEGY_WORK_TYPE,
+            STRATEGY_WORK_TYPE: ACCOUNT_PLANNING_WORK_TYPE,
+        }.get(work_type)
+
+    def _default_specialist_proposal_payloads(
+        self,
+        *,
+        work_type: str,
+        operator_text: str,
+        artifact: WorkflowArtifact | None,
+    ) -> list[dict[str, object]]:
+        artifact_kind = artifact.kind.value if artifact is not None else _work_type_to_artifact_kind(work_type).value
+        artifact_id = artifact.artifact_id if artifact is not None else ""
+        proposals: list[dict[str, object]] = [
+            {
+                "kind": "planning.review_posture",
+                "summary": f"{self._work_type_label(work_type)} output is ready for operator review.",
+                "payload": {
+                    "work_type": work_type,
+                    "artifact_kind": artifact_kind,
+                    "artifact_id": artifact_id,
+                    "review_state": "ready_for_review",
+                    "review_summary": operator_text.strip() or f"{self._work_type_label(work_type)} output is ready.",
+                    "operator_prompt": self._fallback_review_prompt_for_work_type(work_type),
+                },
+                "confidence": 1.0,
+            }
+        ]
+
+        follow_on_work_type = self._fallback_follow_on_work_type(work_type)
+        if follow_on_work_type is not None:
+            proposals.append(
+                {
+                    "kind": "planning.follow_on_recommendation",
+                    "summary": (
+                        f"Recommend {self._work_type_label(follow_on_work_type).lower()} after "
+                        f"{self._work_type_label(work_type).lower()} review."
+                    ),
+                    "payload": {
+                        "current_work_type": work_type,
+                        "recommended_next_work_type": follow_on_work_type,
+                        "recommended_action": "refresh_if_stale",
+                        "reason": f"{self._work_type_label(work_type)} is one bounded planning surface inside a longer-lived loop.",
+                    },
+                    "confidence": 0.9,
+                }
+            )
+        elif work_type == ACCOUNT_PLANNING_WORK_TYPE:
+            proposals.append(
+                {
+                    "kind": "planning.execution_state_impact",
+                    "summary": "Record the execution-state impact of the latest account-plan revision.",
+                    "payload": {
+                        "work_type": work_type,
+                        "recommended_action": "invalidate_prepared_execution_if_present",
+                        "activation_phrase": "activate",
+                        "reason": "Prepared execution should stay deterministic and match the latest approved account-plan revision.",
+                    },
+                    "confidence": 0.95,
+                }
+            )
+        return proposals
 
     def _run_orchestrator_turn(
         self,
@@ -305,6 +944,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             active_work_items=active_work_items,
             active_schedules=active_schedules,
             discovery_mode=discovery_mode,
+            agent_runtime_broker=self._agent_runtime_broker,
         )
 
         message_history = session.workflow_state.get("message_history", [])
@@ -318,19 +958,18 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             {"type": "text", "text": runtime_context},
         ]
 
-        model = _resolve_model()
+        model = resolve_model()
         logger.info("Orchestrator calling Anthropic API model=%s, messages=%d", model, len(messages))
 
-        api_response = self._client.messages.create(
+        completion = self._toolbox.run_completion(
+            client=self._client,
             model=model,
             max_tokens=4096,
             system=system,
             messages=messages,
         )
 
-        final_output_text = "".join(
-            block.text for block in api_response.content if hasattr(block, "text")
-        ).strip()
+        final_output_text = completion.final_output
 
         if not final_output_text:
             logger.warning("Anthropic API turn completed without textual output.")
@@ -356,6 +995,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             final_output_text=final_output_text,
             response_text=response_text,
         )
+        self._refresh_continuous_ops(session=session)
 
         return TelegramResponse.single(update.chat_id, response_text)
 
@@ -373,14 +1013,25 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         agent = DiscoveryAgent(
             session_manager=self._session_manager,
             approval_manager=self._approval_manager,
+            account_capability=self._account_capability,
             community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
             messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
-        operator_text, _artifact, _approval = agent.run(
+        operator_text, artifact, _approval = agent.run(
             session,
             self._build_specialist_operator_message(work_item, operator_message),
             trace_context=trace_context,
+        )
+        self._persist_specialist_advisory_proposals(
+            session,
+            work_type=DISCOVERY_WORK_TYPE,
+            source_role="discovery",
+            operator_text=operator_text,
+            artifact=artifact,
+            raw_proposals=getattr(agent, "last_proposal_payloads", []),
         )
         self._mark_review_pending(
             session,
@@ -390,6 +1041,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 session, WorkflowArtifactKind.COMMUNITY_SHORTLIST
             ),
         )
+        operator_text = self._append_capability_notice(operator_text)
         self._append_assistant_reply(session, operator_text)
         return TelegramResponse.single(update.chat_id, operator_text)
 
@@ -406,13 +1058,25 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         work_item = work_item or self._ensure_work_item_for_type(session, STRATEGY_WORK_TYPE)
         agent = StrategyAgent(
             session_manager=self._session_manager,
+            account_capability=self._account_capability,
             community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
+            messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
         operator_text, artifact = agent.run(
             session,
             operator_message=self._build_specialist_operator_message(work_item, operator_message),
             trace_context=trace_context,
+        )
+        self._persist_specialist_advisory_proposals(
+            session,
+            work_type=STRATEGY_WORK_TYPE,
+            source_role="strategy",
+            operator_text=operator_text,
+            artifact=artifact,
+            raw_proposals=getattr(agent, "last_proposal_payloads", []),
         )
 
         if artifact is not None and self._session_manager is not None:
@@ -432,6 +1096,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 related_memory_refs=[f"artifact:{artifact.artifact_id}"],
             )
 
+        operator_text = self._append_capability_notice(operator_text)
         self._append_assistant_reply(session, operator_text)
         return TelegramResponse.single(update.chat_id, operator_text)
 
@@ -450,14 +1115,27 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             session_manager=self._session_manager,
             approval_manager=self._approval_manager,
             account_capability=self._account_capability,
+            community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
+            messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
         operator_text, artifact, _approval = agent.run(
             session,
             operator_message=self._build_specialist_operator_message(work_item, operator_message),
             trace_context=trace_context,
         )
+        self._persist_specialist_advisory_proposals(
+            session,
+            work_type=ACCOUNT_PLANNING_WORK_TYPE,
+            source_role="account_manager",
+            operator_text=operator_text,
+            artifact=artifact,
+            raw_proposals=getattr(agent, "last_proposal_payloads", []),
+        )
         if artifact is not None and self._session_manager is not None:
+            invalidation_summary = self._invalidate_prepared_execution_for_latest_plan(session)
             self._set_workflow_stage(
                 session,
                 WorkflowStage.ACCOUNT_PLANNING,
@@ -473,6 +1151,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 result_summary="Account assignment plan ready for operator review.",
                 related_memory_refs=[f"artifact:{artifact.artifact_id}"],
             )
+            if invalidation_summary:
+                operator_text = self._append_runtime_note(operator_text, invalidation_summary)
+        operator_text = self._append_capability_notice(operator_text)
         self._append_assistant_reply(session, operator_text)
         return TelegramResponse.single(update.chat_id, operator_text)
 
@@ -485,18 +1166,22 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     ) -> TelegramResponse:
         decision = _classify_approval_response(operator_message)
         if decision is True:
-            self._complete_stage_work_item(
+            self._resolve_campaign_context_revision(session, DISCOVERY_WORK_TYPE, accepted=True)
+            return self._continue_planning_after_review_approval(
+                session,
+                update,
+                approved_work_type=DISCOVERY_WORK_TYPE,
+                approved_summary="Community shortlist accepted in chat.",
+                follow_on_summary="Community shortlist accepted in chat. Refreshing strategy planning.",
+                trace_context=trace_context,
+            )
+        if decision is False or _looks_like_revision_feedback(operator_message):
+            self._promote_campaign_context_revision(
                 session,
                 DISCOVERY_WORK_TYPE,
-                "Community shortlist accepted in chat.",
+                operator_message,
+                source_message_id=update.message_id,
             )
-            self._set_workflow_stage(
-                session,
-                WorkflowStage.STRATEGY,
-                "Community shortlist accepted in chat. Generating strategy playbook.",
-            )
-            return self._run_strategy_agent(session, update, trace_context=trace_context)
-        if decision is False:
             self._reopen_stage_work_item(
                 session,
                 DISCOVERY_WORK_TYPE,
@@ -506,7 +1191,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         return self._reply_with_stage_prompt(
             session,
             update,
-            "I have a shortlist ready. Tell me what to change, or say `move to strategy` when you want me to continue.",
+            self._review_prompt_for_work_type(session, DISCOVERY_WORK_TYPE),
         )
 
     def _handle_strategy_review_turn(
@@ -518,18 +1203,22 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     ) -> TelegramResponse:
         decision = _classify_approval_response(operator_message)
         if decision is True:
-            self._complete_stage_work_item(
+            self._resolve_campaign_context_revision(session, STRATEGY_WORK_TYPE, accepted=True)
+            return self._continue_planning_after_review_approval(
+                session,
+                update,
+                approved_work_type=STRATEGY_WORK_TYPE,
+                approved_summary="Strategy playbook accepted in chat.",
+                follow_on_summary="Strategy accepted in chat. Refreshing account planning.",
+                trace_context=trace_context,
+            )
+        if decision is False or _looks_like_revision_feedback(operator_message):
+            self._promote_campaign_context_revision(
                 session,
                 STRATEGY_WORK_TYPE,
-                "Strategy playbook accepted in chat.",
+                operator_message,
+                source_message_id=update.message_id,
             )
-            self._set_workflow_stage(
-                session,
-                WorkflowStage.ACCOUNT_PLANNING,
-                "Strategy accepted in chat. Generating the account assignment plan.",
-            )
-            return self._run_account_manager_agent(session, update, trace_context=trace_context)
-        if decision is False:
             self._reopen_stage_work_item(
                 session,
                 STRATEGY_WORK_TYPE,
@@ -544,7 +1233,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         return self._reply_with_stage_prompt(
             session,
             update,
-            "I have a strategy draft ready. Tell me what to change, or say `continue` when you want the account plan.",
+            self._review_prompt_for_work_type(session, STRATEGY_WORK_TYPE),
         )
 
     def _handle_account_plan_review_turn(
@@ -555,6 +1244,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     ) -> TelegramResponse:
         decision = _classify_approval_response(operator_message)
         if decision is True:
+            self._resolve_campaign_context_revision(session, ACCOUNT_PLANNING_WORK_TYPE, accepted=True)
             self._complete_stage_work_item(
                 session,
                 ACCOUNT_PLANNING_WORK_TYPE,
@@ -562,15 +1252,21 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             )
             self._set_workflow_stage(
                 session,
-                WorkflowStage.COMPLETE,
-                "Account assignment plan accepted in chat.",
+                WorkflowStage.ACCOUNT_PLANNING,
+                "Account assignment plan approved in chat. The campaign remains active for execution and future planning refreshes.",
             )
             return self._reply_with_stage_prompt(
                 session,
                 update,
-                "The account assignment plan is approved in chat and ready for the next execution step when you want it.",
+                self._approval_completion_prompt(session, ACCOUNT_PLANNING_WORK_TYPE),
             )
-        if decision is False:
+        if decision is False or _looks_like_revision_feedback(operator_message):
+            self._promote_campaign_context_revision(
+                session,
+                ACCOUNT_PLANNING_WORK_TYPE,
+                operator_message,
+                source_message_id=update.message_id,
+            )
             self._reopen_stage_work_item(
                 session,
                 ACCOUNT_PLANNING_WORK_TYPE,
@@ -584,19 +1280,247 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         return self._reply_with_stage_prompt(
             session,
             update,
-            "I have an account plan ready. Tell me what to change, or say `approve` when you want to lock it in.",
+            self._review_prompt_for_work_type(session, ACCOUNT_PLANNING_WORK_TYPE),
         )
 
-    def _resolve_specialist_route(
+    def _handle_plan_activation_turn(
+        self,
+        session: SessionRecord,
+        update: TelegramUpdate,
+    ) -> TelegramResponse:
+        if self._prepared_execution_service is None:
+            return self._reply_with_stage_prompt(
+                session,
+                update,
+                "Execution activation is not available in this runtime yet.",
+            )
+        activation_result = self._prepared_execution_service.activate_latest_plan(
+            session,
+            queue_immediately=self._allow_live_sends,
+        )
+        if activation_result.batch is not None:
+            self._set_workflow_stage(
+                session,
+                WorkflowStage.ACCOUNT_PLANNING,
+                "Prepared execution is active for the latest approved account plan.",
+                data={
+                    "account_assignment_plan_artifact_id": activation_result.batch.source_plan_artifact_id,
+                    "prepared_execution_batch_id": activation_result.batch.batch_id,
+                    "prepared_execution_status": activation_result.batch.status.value,
+                    "prepared_execution_queued_count": activation_result.queued_count,
+                    "prepared_execution_held_count": activation_result.held_count,
+                    "prepared_execution_blocked_count": activation_result.blocked_count,
+                },
+            )
+        self._append_assistant_reply(session, activation_result.message)
+        return TelegramResponse.single(update.chat_id, activation_result.message)
+
+    def _continue_planning_after_review_approval(
+        self,
+        session: SessionRecord,
+        update: TelegramUpdate,
+        *,
+        approved_work_type: str,
+        approved_summary: str,
+        follow_on_summary: str,
+        trace_context: RuntimeTraceContext | None = None,
+    ) -> TelegramResponse:
+        self._complete_stage_work_item(session, approved_work_type, approved_summary)
+        follow_on = self._determine_follow_on_work(session, approved_work_type, follow_on_summary)
+        if follow_on is None:
+            return self._reply_with_stage_prompt(
+                session,
+                update,
+                "I saved that review outcome. Tell me what you want to refresh next.",
+            )
+        if follow_on.action == "review_pending":
+            self._set_workflow_stage(
+                session,
+                WORK_TYPE_TO_STAGE[follow_on.work_type],
+                follow_on.summary,
+            )
+            return self._reply_with_stage_prompt(
+                session,
+                update,
+                self._review_prompt_for_work_type(session, follow_on.work_type),
+            )
+        if follow_on.action == "up_to_date":
+            self._set_workflow_stage(
+                session,
+                WORK_TYPE_TO_STAGE[follow_on.work_type],
+                follow_on.summary,
+            )
+            return self._reply_with_stage_prompt(
+                session,
+                update,
+                self._up_to_date_prompt_for_work_type(session, follow_on.work_type),
+            )
+        if follow_on.work_type == STRATEGY_WORK_TYPE:
+            return self._run_strategy_agent(
+                session,
+                update,
+                work_item=follow_on.work_item,
+                trace_context=trace_context,
+            )
+        if follow_on.work_type == ACCOUNT_PLANNING_WORK_TYPE:
+            return self._run_account_manager_agent(
+                session,
+                update,
+                work_item=follow_on.work_item,
+                trace_context=trace_context,
+            )
+        return self._reply_with_stage_prompt(
+            session,
+            update,
+            "I saved that review outcome. Tell me what you want to refresh next.",
+        )
+
+    def _determine_follow_on_work(
+        self,
+        session: SessionRecord,
+        completed_work_type: str,
+        summary: str,
+    ) -> FollowOnDecision | None:
+        follow_on_recommendation = self._latest_follow_on_recommendation(session, completed_work_type)
+        follow_on_work_type = self._follow_on_work_type_from_recommendation(
+            follow_on_recommendation,
+            completed_work_type=completed_work_type,
+        )
+        if follow_on_work_type is None:
+            return None
+        follow_on_work_item = self._get_work_item_for_type(session, follow_on_work_type)
+        needs_refresh = self._follow_on_work_needs_refresh(
+            session,
+            completed_work_type,
+            follow_on_work_type,
+        )
+        if not needs_refresh and follow_on_work_item is not None and follow_on_work_item.status is WorkItemStatus.REVIEW_PENDING:
+            return FollowOnDecision(
+                work_type=follow_on_work_type,
+                work_item=follow_on_work_item,
+                action="review_pending",
+                summary=f"{self._work_type_label(follow_on_work_type)} draft is already waiting for review.",
+            )
+        if not needs_refresh:
+            return FollowOnDecision(
+                work_type=follow_on_work_type,
+                work_item=follow_on_work_item,
+                action="up_to_date",
+                summary=f"{self._work_type_label(follow_on_work_type)} is already current for the latest approved inputs.",
+            )
+        follow_on_work_item = self._activate_follow_on_work_item(
+            session,
+            completed_work_type=completed_work_type,
+            follow_on_work_type=follow_on_work_type,
+            summary=summary,
+        )
+        if follow_on_work_item is None:
+            return None
+        return FollowOnDecision(
+            work_type=follow_on_work_type,
+            work_item=follow_on_work_item,
+            action="run",
+            summary=summary,
+        )
+
+    def _activate_follow_on_work_item(
+        self,
+        session: SessionRecord,
+        *,
+        completed_work_type: str,
+        follow_on_work_type: str,
+        summary: str,
+    ) -> WorkItemRecord | None:
+        if (
+            self._work_item_manager is None
+            or not session.campaign_id
+        ):
+            return self._ensure_work_item_for_type(
+                session,
+                follow_on_work_type,
+                status=WorkItemStatus.IN_PROGRESS,
+                trigger_source="review_acceptance",
+                refresh_reason=summary,
+            )
+        context_refs = self._related_refs_for_work_type(session, follow_on_work_type)
+        completed_work_item = self._get_work_item_for_type(session, completed_work_type)
+        if completed_work_item is not None:
+            context_refs.append(f"work_item:{completed_work_item.work_item_id}")
+        follow_on_work_item = self._get_work_item_for_type(session, follow_on_work_type)
+        if self._compiled_intent_store is None or self._compiled_intent_applicator is None:
+            follow_on_item = self._ensure_work_item_for_type(
+                session,
+                follow_on_work_type,
+                status=WorkItemStatus.IN_PROGRESS,
+                trigger_source="review_acceptance",
+                refresh_reason=summary,
+                context_refs=context_refs,
+            )
+            if follow_on_item is None:
+                return None
+            self._work_item_manager.update_status(
+                session.campaign_id,
+                follow_on_item.work_item_id,
+                status=WorkItemStatus.IN_PROGRESS,
+                result_summary="",
+                trigger_source="review_acceptance",
+                refresh_reason=summary,
+                context_refs=context_refs,
+                related_memory_refs=self._related_refs_for_work_type(session, follow_on_work_type),
+            )
+            reloaded_item = self._work_item_manager.get(session.campaign_id, follow_on_item.work_item_id)
+        else:
+            action = "refresh" if follow_on_work_item is not None else "propose"
+            compiled_intent = compile_work_intent(
+                session.campaign_id,
+                action=action,
+                work_payload={
+                    "owner_role": WORK_TYPE_TO_OWNER_ROLE[follow_on_work_type],
+                    "work_type": follow_on_work_type,
+                    "goal": self._build_stage_goal(session, follow_on_work_type),
+                    "constraints": self._build_stage_constraints(session),
+                    "priority": WorkItemPriority.HIGH.value,
+                    "related_memory_refs": self._related_refs_for_work_type(session, follow_on_work_type),
+                    "context_refs": context_refs,
+                    "trigger_source": "review_acceptance",
+                    "refresh_reason": summary,
+                    "status": WorkItemStatus.IN_PROGRESS.value,
+                },
+                source_role="orchestrator",
+                grounding_refs=self._build_control_grounding_refs(session),
+                confidence=1.0,
+            )
+            if compiled_intent is None:
+                return None
+            self._apply_persisted_compiled_intent(session, compiled_intent)
+            reloaded_item = self._get_work_item_for_type(session, follow_on_work_type)
+        if reloaded_item is not None:
+            self._set_workflow_stage(
+                session,
+                WORK_TYPE_TO_STAGE[follow_on_work_type],
+                summary,
+            )
+        return reloaded_item
+
+    def _resolve_reasoning_surface_route(
         self,
         session: SessionRecord,
         pending_approval: ApprovalRecord | None,
-    ) -> SpecialistRoute | None:
+    ) -> ReasoningSurfaceRoute | None:
         stage = get_workflow_snapshot(session).stage
         released_stage = self._release_legacy_approval_gate(session, stage, pending_approval)
+        if self._setup_requires_orchestrator_turn(session, released_stage):
+            return None
+        review_pending_planning_item = self._get_review_pending_planning_work_item(session)
+        if review_pending_planning_item is not None:
+            return self._build_reasoning_surface_route(
+                work_type=review_pending_planning_item.work_type,
+                work_item=review_pending_planning_item,
+                review_pending=True,
+            )
         primary_work_item = self._get_primary_work_item(session)
         if primary_work_item is not None:
-            return SpecialistRoute(
+            return self._build_reasoning_surface_route(
                 work_type=primary_work_item.work_type,
                 work_item=primary_work_item,
                 review_pending=primary_work_item.status is WorkItemStatus.REVIEW_PENDING,
@@ -607,7 +1531,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         self,
         session: SessionRecord,
         stage: WorkflowStage,
-    ) -> SpecialistRoute | None:
+    ) -> ReasoningSurfaceRoute | None:
         work_type = STAGE_TO_WORK_TYPE.get(stage)
         if work_type is None:
             return None
@@ -617,9 +1541,25 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             session,
             work_type,
             status=WorkItemStatus.REVIEW_PENDING if review_pending else WorkItemStatus.IN_PROGRESS,
+            trigger_source="compatibility_backfill",
+            refresh_reason="Created from compatibility workflow stage state.",
         )
-        return SpecialistRoute(
+        return self._build_reasoning_surface_route(
             work_type=work_type,
+            work_item=work_item,
+            review_pending=review_pending,
+        )
+
+    def _build_reasoning_surface_route(
+        self,
+        *,
+        work_type: str,
+        work_item: WorkItemRecord | None,
+        review_pending: bool,
+    ) -> ReasoningSurfaceRoute:
+        return ReasoningSurfaceRoute(
+            work_type=work_type,
+            reasoning_surface=reasoning_surface_for_work_type(work_type),
             work_item=work_item,
             review_pending=review_pending,
         )
@@ -710,6 +1650,166 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         if self._session_manager is not None:
             self._session_manager.save_session(session)
 
+    def _promote_general_operator_context(
+        self,
+        session: SessionRecord,
+        operator_message: str,
+        *,
+        source_message_id: str = "",
+    ) -> None:
+        normalized_message = operator_message.strip()
+        if not normalized_message:
+            return
+        existing_artifact = get_campaign_context_artifact(session)
+        merged_context = merge_campaign_context_data(
+            self._campaign_context_data(session),
+            message=normalized_message,
+            source_message_id=source_message_id,
+        )
+        if existing_artifact is not None and merged_context == existing_artifact.data:
+            return
+        if (
+            existing_artifact is None
+            and build_campaign_context_summary(merged_context) == "No durable campaign-context guidance has been promoted yet."
+        ):
+            return
+        self._persist_campaign_context_update(
+            session,
+            merged_context,
+            summary="Promote durable campaign-context guidance from the latest operator turn.",
+            source_role="operator",
+        )
+
+    def _promote_campaign_context_revision(
+        self,
+        session: SessionRecord,
+        scope: str,
+        operator_message: str,
+        *,
+        source_message_id: str = "",
+    ) -> None:
+        normalized_message = operator_message.strip()
+        if not normalized_message:
+            return
+        revised_context = promote_campaign_context_revision(
+            self._campaign_context_data(session),
+            scope=scope,
+            message=normalized_message,
+            source_message_id=source_message_id,
+        )
+        self._persist_campaign_context_update(
+            session,
+            revised_context,
+            summary=f"Promote a `{scope}` revision request into the durable campaign context.",
+            source_role="operator",
+        )
+
+    def _resolve_campaign_context_revision(
+        self,
+        session: SessionRecord,
+        scope: str,
+        *,
+        accepted: bool,
+    ) -> None:
+        resolved_context = resolve_campaign_context_revision(
+            self._campaign_context_data(session),
+            scope=scope,
+            accepted=accepted,
+        )
+        outcome = "accepted" if accepted else "superseded"
+        self._persist_campaign_context_update(
+            session,
+            resolved_context,
+            summary=f"Mark the latest `{scope}` revision as `{outcome}` in durable campaign context.",
+            source_role="orchestrator",
+        )
+
+    def _campaign_context_data(self, session: SessionRecord) -> dict[str, object] | None:
+        artifact = get_campaign_context_artifact(session)
+        return artifact.data if artifact is not None else None
+
+    def _persist_campaign_context_update(
+        self,
+        session: SessionRecord,
+        data: dict[str, object] | None,
+        *,
+        summary: str,
+        source_role: str,
+    ) -> None:
+        if not isinstance(data, dict):
+            return
+        if self._compiled_intent_store is None or not session.campaign_id:
+            self._update_campaign_context_artifact(session, data)
+            return
+        compiled_intent = compile_campaign_context_update(
+            session.campaign_id,
+            data,
+            summary=summary,
+            source_role=source_role,
+            grounding_refs=self._build_control_grounding_refs(session),
+            confidence=1.0,
+        )
+        if compiled_intent is None:
+            self._update_campaign_context_artifact(session, data)
+            return
+        self._apply_persisted_compiled_intent(session, compiled_intent)
+
+    def _update_campaign_context_artifact(
+        self,
+        session: SessionRecord,
+        data: dict[str, object] | None,
+    ) -> None:
+        if self._session_manager is None or not isinstance(data, dict):
+            return
+        artifact = get_campaign_context_artifact(session)
+        if artifact is None:
+            artifact = self._session_manager.create_workflow_artifact(
+                session=session,
+                kind=WorkflowArtifactKind.CAMPAIGN_CONTEXT,
+                title=CAMPAIGN_CONTEXT_TITLE,
+                summary="Campaign context promotion has not captured durable nuance yet.",
+                data=data,
+            )
+        artifact.data = data
+        artifact.summary = build_campaign_context_summary(data)
+        self._session_manager.save_workflow_artifact(session, artifact)
+
+    def _run_operator_observation_turn(
+        self,
+        session: SessionRecord,
+        update: TelegramUpdate,
+        *,
+        operator_message: str,
+        work_item: WorkItemRecord | None = None,
+    ) -> TelegramResponse:
+        if not session.campaign_id:
+            return self._run_orchestrator_turn(session, update, pending_approval=None)
+
+        observation_outcome = self._execute_observation_work(
+            session.campaign_id,
+            trigger_source="operator_turn",
+            refresh_reason=(work_item.refresh_reason if work_item is not None else "") or operator_message,
+        )
+        response_text = observation_outcome.operator_text.strip() or (
+            "Observation review did not find anything new to route right now."
+        )
+
+        if observation_outcome.work_item is not None:
+            self._set_workflow_stage(
+                session,
+                get_workflow_snapshot(session).stage,
+                self._build_observation_stage_summary(observation_outcome.work_item),
+                data={
+                    "routing_reason": "observation_priority",
+                    "last_observation_work_item_id": observation_outcome.work_item.work_item_id,
+                    "last_observation_status": observation_outcome.work_item.status.value,
+                    "last_observation_result_summary": observation_outcome.work_item.result_summary,
+                },
+            )
+
+        self._append_assistant_reply(session, response_text)
+        return TelegramResponse.single(update.chat_id, response_text)
+
     def handle_scheduled_work(
         self,
         schedule: ScheduleRecord,
@@ -719,6 +1819,8 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         """Create or refresh and execute campaign work directly from a due schedule."""
         if self._work_item_manager is None or self._schedule_manager is None:
             return None
+        if schedule.work_type == OBSERVATION_WORK_TYPE:
+            return self._handle_scheduled_observation_work(schedule, now=now)
         work_item = self._work_item_manager.ensure_work_item(
             schedule.campaign_id,
             owner_role=schedule.owner_role,
@@ -727,6 +1829,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             constraints=schedule.constraints,
             priority=schedule.priority,
             due_at=schedule.next_run_at,
+            trigger_source="schedule",
+            refresh_reason=f"Recurring schedule `{schedule.schedule_id}` triggered `{schedule.work_type}` work.",
+            context_refs=[f"schedule:{schedule.schedule_id}"],
             schedule_id=schedule.schedule_id,
             status=WorkItemStatus.IN_PROGRESS,
         )
@@ -745,6 +1850,7 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 ran_at=now,
                 error=escalation_reason,
             )
+            self._refresh_continuous_ops(campaign_id=schedule.campaign_id)
             return self._work_item_manager.get(schedule.campaign_id, work_item.work_item_id)
 
         try:
@@ -763,10 +1869,190 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 ran_at=now,
                 error=escalation_reason,
             )
+            self._refresh_continuous_ops(campaign_id=schedule.campaign_id)
             return self._work_item_manager.get(schedule.campaign_id, work_item.work_item_id)
 
         self._apply_scheduled_work_outcome(schedule, work_item, outcome, ran_at=now)
+        self._refresh_continuous_ops(session=session)
         return self._work_item_manager.get(schedule.campaign_id, work_item.work_item_id)
+
+    def run_pending_observation_work(
+        self,
+        campaign_id: str,
+        *,
+        trigger_source: str = "observation_runner",
+        refresh_reason: str = "",
+    ) -> WorkItemRecord | None:
+        """Execute the current observation work item without routing through an operator turn."""
+        return self._execute_observation_work(
+            campaign_id,
+            trigger_source=trigger_source,
+            refresh_reason=refresh_reason,
+        ).work_item
+
+    def _execute_observation_work(
+        self,
+        campaign_id: str,
+        *,
+        trigger_source: str,
+        refresh_reason: str = "",
+    ) -> ObservationExecutionOutcome:
+        """Run the shared bounded observation-review path and return operator-safe text."""
+        if (
+            self._signal_manager is None
+            or self._observation_work_refresher is None
+            or self._work_item_manager is None
+        ):
+            return ObservationExecutionOutcome(None, "")
+
+        work_item = self._find_pending_observation_work_item(campaign_id)
+        if work_item is None:
+            work_item = self._observation_work_refresher.refresh_for_campaign(
+                campaign_id,
+                trigger_source=trigger_source,
+                refresh_reason=refresh_reason,
+            )
+        if work_item is None:
+            self._refresh_continuous_ops(campaign_id=campaign_id)
+            return ObservationExecutionOutcome(None, "")
+
+        selected_signals = self._resolve_observation_signals(campaign_id, work_item)
+        if not selected_signals:
+            self._work_item_manager.update_status(
+                campaign_id,
+                work_item.work_item_id,
+                status=WorkItemStatus.COMPLETED,
+                result_summary="Observation review found no new unresolved campaign signals to review.",
+                trigger_source=trigger_source,
+                refresh_reason=refresh_reason.strip() or "Observation review found no new unresolved signals.",
+                context_refs=[],
+            )
+            reloaded = self._work_item_manager.get(campaign_id, work_item.work_item_id)
+            self._refresh_continuous_ops(campaign_id=campaign_id)
+            return ObservationExecutionOutcome(
+                reloaded,
+                "Observation review found no new unresolved campaign signals to review.",
+            )
+
+        observation_session = self._build_observation_session(campaign_id)
+        if observation_session is None:
+            self._work_item_manager.update_status(
+                campaign_id,
+                work_item.work_item_id,
+                status=WorkItemStatus.ESCALATED,
+                result_summary="Observation review could not resolve campaign-native context.",
+                escalation_reason="Observation review could not resolve campaign-native context.",
+                trigger_source=trigger_source,
+                refresh_reason="Observation review could not resolve campaign-native context.",
+            )
+            reloaded = self._work_item_manager.get(campaign_id, work_item.work_item_id)
+            self._refresh_continuous_ops(campaign_id=campaign_id)
+            return ObservationExecutionOutcome(
+                reloaded,
+                "Observation review could not resolve campaign-native context.",
+            )
+
+        updated_context_refs = [f"signal:{signal.signal_id}" for signal in selected_signals]
+        self._work_item_manager.update_status(
+            campaign_id,
+            work_item.work_item_id,
+            status=WorkItemStatus.IN_PROGRESS,
+            trigger_source=trigger_source,
+            refresh_reason=refresh_reason.strip() or work_item.refresh_reason,
+            context_refs=updated_context_refs,
+        )
+        refreshed_work_item = self._work_item_manager.get(campaign_id, work_item.work_item_id) or work_item
+        review_result, operator_text = self._run_observation_review(
+            observation_session,
+            refreshed_work_item,
+            selected_signals,
+            trigger_source=trigger_source,
+        )
+        if review_result is None:
+            self._work_item_manager.update_status(
+                campaign_id,
+                refreshed_work_item.work_item_id,
+                status=WorkItemStatus.ESCALATED,
+                result_summary="Observation review did not return a valid structured result.",
+                escalation_reason="Observation review did not return a valid structured result.",
+                trigger_source=trigger_source,
+                refresh_reason="Observation review did not return a valid structured result.",
+                context_refs=updated_context_refs,
+            )
+            reloaded = self._work_item_manager.get(campaign_id, refreshed_work_item.work_item_id)
+            self._refresh_continuous_ops(session=observation_session)
+            retry_message = operator_text.strip() or (
+                "Observation review did not return a valid structured result. "
+                "Please ask me to retry observation review."
+            )
+            return ObservationExecutionOutcome(reloaded, retry_message)
+
+        if operator_text.strip():
+            self._append_assistant_reply(observation_session, f"[Observation review] {operator_text.strip()}")
+
+        self._promote_observation_memory_notes(observation_session, review_result)
+        follow_on_actions = self._apply_observation_follow_on(observation_session, review_result)
+        final_status = self._observation_work_status(review_result)
+        summary = review_result.summary
+        if follow_on_actions:
+            summary = f"{summary} Follow-on: {', '.join(follow_on_actions)}."
+        review_context_refs = [f"review:{review_result.review_id}", *updated_context_refs]
+        if final_status is WorkItemStatus.REVIEW_PENDING:
+            self._mark_review_pending(
+                observation_session,
+                refreshed_work_item,
+                result_summary=summary,
+                related_memory_refs=review_context_refs,
+            )
+        else:
+            self._work_item_manager.update_status(
+                campaign_id,
+                refreshed_work_item.work_item_id,
+                status=final_status,
+                result_summary=summary,
+                trigger_source=trigger_source,
+                refresh_reason=review_result.review_reason,
+                context_refs=review_context_refs,
+                related_memory_refs=[f"review:{review_result.review_id}"],
+            )
+        reloaded = self._work_item_manager.get(campaign_id, refreshed_work_item.work_item_id)
+        self._refresh_continuous_ops(session=observation_session)
+        return ObservationExecutionOutcome(reloaded, operator_text.strip() or summary)
+
+    def _handle_scheduled_observation_work(
+        self,
+        schedule: ScheduleRecord,
+        *,
+        now: datetime | None = None,
+    ) -> WorkItemRecord | None:
+        if self._schedule_manager is None:
+            return None
+
+        work_item = self.run_pending_observation_work(
+            schedule.campaign_id,
+            trigger_source="schedule",
+            refresh_reason=f"Recurring schedule `{schedule.schedule_id}` triggered `observation` work.",
+        )
+        if work_item is None:
+            self._schedule_manager.record_outcome(
+                schedule.campaign_id,
+                schedule.schedule_id,
+                ran_at=now,
+                metric_value=0,
+                outcome_summary="Scheduled observation review found no new unresolved signals to review.",
+            )
+            self._refresh_continuous_ops(campaign_id=schedule.campaign_id)
+            return None
+
+        self._schedule_manager.record_outcome(
+            schedule.campaign_id,
+            schedule.schedule_id,
+            ran_at=now,
+            metric_value=len([ref for ref in work_item.context_refs if ref.startswith("signal:")]),
+            outcome_summary=work_item.result_summary,
+        )
+        self._refresh_continuous_ops(campaign_id=schedule.campaign_id)
+        return work_item
 
     def _apply_scheduled_work_outcome(
         self,
@@ -787,6 +2073,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 result_summary=outcome.result_summary,
                 escalation_reason=outcome.result_summary,
                 related_memory_refs=outcome.related_memory_refs,
+                trigger_source="schedule",
+                refresh_reason=outcome.result_summary,
+                context_refs=[f"schedule:{schedule.schedule_id}"],
             )
         else:
             self._work_item_manager.update_status(
@@ -795,6 +2084,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
                 status=outcome.status,
                 result_summary=outcome.result_summary,
                 related_memory_refs=outcome.related_memory_refs,
+                trigger_source="schedule",
+                refresh_reason=outcome.result_summary,
+                context_refs=[f"schedule:{schedule.schedule_id}"],
             )
 
         updated_schedule = self._schedule_manager.record_outcome(
@@ -819,6 +2111,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             result_summary=outcome.result_summary,
             escalation_reason=pause_reason,
             related_memory_refs=outcome.related_memory_refs,
+            trigger_source="schedule",
+            refresh_reason=pause_reason,
+            context_refs=[f"schedule:{schedule.schedule_id}"],
         )
 
     def _execute_scheduled_stage(
@@ -852,9 +2147,12 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         agent = DiscoveryAgent(
             session_manager=None,
             approval_manager=None,
+            account_capability=self._account_capability,
             community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
             messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
         operator_text, artifact, _approval = agent.run(
             session,
@@ -896,8 +2194,12 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         ).with_session(session)
         agent = StrategyAgent(
             session_manager=None,
+            account_capability=self._account_capability,
             community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
+            messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
         operator_text, artifact = agent.run(
             session,
@@ -939,7 +2241,11 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             session_manager=None,
             approval_manager=None,
             account_capability=self._account_capability,
+            community_capability=self._community_capability,
+            membership_capability=self._membership_capability,
+            messaging_capability=self._messaging_capability,
             monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
         )
         operator_text, artifact, _approval = agent.run(
             session,
@@ -964,6 +2270,304 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             metric_value=1,
             related_memory_refs=[f"artifact:{artifact.artifact_id}"],
         )
+
+    def _find_pending_observation_work_item(self, campaign_id: str) -> WorkItemRecord | None:
+        if self._work_item_manager is None:
+            return None
+        return self._work_item_manager.find_latest(
+            campaign_id,
+            work_type=OBSERVATION_WORK_TYPE,
+            owner_role=OBSERVATION_OWNER_ROLE,
+            statuses={WorkItemStatus.PENDING, WorkItemStatus.IN_PROGRESS},
+        )
+
+    def _resolve_observation_signals(
+        self,
+        campaign_id: str,
+        work_item: WorkItemRecord,
+    ) -> list[CampaignSignalRecord]:
+        if self._signal_manager is None:
+            return []
+
+        signal_ids = [
+            ref.split(":", 1)[1]
+            for ref in work_item.context_refs
+            if ref.startswith("signal:") and ":" in ref
+        ]
+        selected_signals = [
+            signal
+            for signal_id in signal_ids
+            if (signal := self._signal_manager.get(campaign_id, signal_id)) is not None
+            and signal.review_eligible
+            and signal.state.value == "unresolved"
+        ]
+        if selected_signals:
+            return selected_signals[:OBSERVATION_SIGNAL_DIGEST_LIMIT]
+        return self._signal_manager.select_review_batch(
+            campaign_id,
+            limit=OBSERVATION_SIGNAL_DIGEST_LIMIT,
+        )
+
+    def _build_observation_session(self, campaign_id: str) -> SessionRecord | None:
+        if self._campaign_manager is None:
+            return None
+        return self._campaign_manager.build_background_session(
+            campaign_id,
+            stage=self._background_stage_for_campaign(campaign_id),
+            summary="Observation review is using campaign-native context.",
+        )
+
+    def _background_stage_for_campaign(self, campaign_id: str) -> WorkflowStage:
+        if self._campaign_manager is None:
+            return WorkflowStage.DISCOVERY
+        artifacts = self._campaign_manager.load_compatibility_artifacts(campaign_id)
+        artifact_kinds = {artifact.kind for artifact in artifacts}
+        if WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN in artifact_kinds:
+            return WorkflowStage.ACCOUNT_PLANNING
+        if WorkflowArtifactKind.STRATEGY_PLAYBOOK in artifact_kinds:
+            return WorkflowStage.STRATEGY
+        if WorkflowArtifactKind.COMMUNITY_SHORTLIST in artifact_kinds:
+            return WorkflowStage.DISCOVERY
+        return WorkflowStage.INTAKE
+
+    def _run_observation_review(
+        self,
+        session: SessionRecord,
+        work_item: WorkItemRecord,
+        selected_signals: list[CampaignSignalRecord],
+        *,
+        trigger_source: str,
+    ) -> tuple[ObservationReviewResult | None, str]:
+        if self._signal_manager is None:
+            return None, ""
+
+        from agents.observation.agent import ObservationReviewAgent
+
+        signal_digests = [self._build_signal_digest(signal) for signal in selected_signals]
+        latest_review = self._signal_manager.get_latest_review_result(session.campaign_id or "")
+        trace_context = RuntimeTraceContext(
+            trace_id=f"observation:{work_item.work_item_id}",
+            user_id=session.operator_id,
+            session_id=session.session_id,
+        ).with_session(session)
+        agent = ObservationReviewAgent(
+            monitor=self._monitor,
+            runtime_broker=self._agent_runtime_broker,
+        )
+        operator_text, brief = agent.run(
+            session,
+            review_reason=work_item.refresh_reason or work_item.goal,
+            signal_digests=signal_digests,
+            current_planning_work_summary=self._build_observation_planning_summary(session),
+            last_review_summary=latest_review.summary if latest_review is not None else "",
+            trace_context=trace_context,
+        )
+        if brief is None:
+            return None, operator_text
+
+        review_result = self._signal_manager.complete_review(
+            session.campaign_id or "",
+            work_item_id=work_item.work_item_id,
+            trigger_source=trigger_source,
+            review_reason=work_item.refresh_reason or work_item.goal,
+            signal_ids=[signal.signal_id for signal in selected_signals],
+            brief=brief,
+        )
+        return review_result, operator_text
+
+    def _build_observation_planning_summary(self, session: SessionRecord) -> list[dict[str, str]]:
+        if self._work_item_manager is None or not session.campaign_id:
+            return []
+        planning_items = [
+            item
+            for item in self._work_item_manager.list_open_for_campaign(session.campaign_id)
+            if item.work_type in {STRATEGY_WORK_TYPE, ACCOUNT_PLANNING_WORK_TYPE}
+        ]
+        ordered = sorted(planning_items, key=lambda item: item.updated_at, reverse=True)
+        return [
+            {
+                "work_type": item.work_type,
+                "status": item.status.value,
+                "goal": item.goal,
+                "refresh_reason": item.refresh_reason,
+                "result_summary": item.result_summary,
+            }
+            for item in ordered[:3]
+        ]
+
+    def _build_signal_digest(self, signal: CampaignSignalRecord) -> dict[str, object]:
+        return {
+            "signal_id": signal.signal_id,
+            "signal_type": signal.signal_type,
+            "severity": signal.severity.value,
+            "summary": signal.summary,
+            "source_kind": signal.source_kind,
+            "source_ref": signal.source_ref,
+            "account_id": signal.account_id,
+            "community_id": signal.community_id,
+            "conversation_id": signal.conversation_id,
+            "occurrence_count": signal.occurrence_count,
+            "first_happened_at": signal.first_happened_at.isoformat(),
+            "last_happened_at": signal.last_happened_at.isoformat(),
+            "last_reviewed_at": signal.last_reviewed_at.isoformat() if signal.last_reviewed_at else "",
+            "context_refs": signal.context_refs[:3],
+        }
+
+    def _promote_observation_memory_notes(
+        self,
+        session: SessionRecord,
+        review_result: ObservationReviewResult,
+    ) -> None:
+        if self._campaign_manager is None:
+            return
+        for index, line in enumerate(review_result.memory_note_lines[:3], start=1):
+            normalized_line = line.strip()
+            if not normalized_line:
+                continue
+            if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None:
+                compiled_intent = compile_memory_note(
+                    review_result.campaign_id,
+                    destination=NEXT_ACTIONS_DESTINATION,
+                    line=normalized_line,
+                    summary="Save an observation-review memory note.",
+                    source_role="observation",
+                    category="observation_review",
+                    dedupe_key=f"{review_result.review_id}:{index}",
+                    grounding_refs=[
+                        f"campaign:{review_result.campaign_id}",
+                        f"review:{review_result.review_id}",
+                    ],
+                )
+                self._apply_persisted_compiled_intent(session, compiled_intent)
+                continue
+            self._campaign_manager.append_operational_note(
+                review_result.campaign_id,
+                destination=NEXT_ACTIONS_DESTINATION,
+                line=normalized_line,
+                category="observation_review",
+                dedupe_key=f"{review_result.review_id}:{index}",
+                recorded_at=review_result.created_at,
+            )
+
+    def _apply_observation_follow_on(
+        self,
+        session: SessionRecord,
+        review_result: ObservationReviewResult,
+    ) -> list[str]:
+        actions_taken: list[str] = []
+        for work_type in (STRATEGY_WORK_TYPE, ACCOUNT_PLANNING_WORK_TYPE):
+            row = self._find_observation_work_item_change(review_result, work_type)
+            action = self._resolve_observation_follow_on_action(review_result, work_type, row)
+            if action is ObservationWorkItemChangeAction.NONE:
+                continue
+            if action is ObservationWorkItemChangeAction.CREATE_IF_MISSING and self._has_open_work_item(session, work_type):
+                continue
+            refreshed_item = self._refresh_work_item_from_observation(session, review_result, work_type)
+            if refreshed_item is None:
+                continue
+            action_label = "refreshed" if action is ObservationWorkItemChangeAction.REFRESH else "created"
+            actions_taken.append(f"{action_label} `{work_type}` work")
+        return actions_taken
+
+    def _refresh_work_item_from_observation(
+        self,
+        session: SessionRecord,
+        review_result: ObservationReviewResult,
+        work_type: str,
+    ) -> WorkItemRecord | None:
+        context_refs = [f"review:{review_result.review_id}", *self._related_refs_for_work_type(session, work_type)]
+        existing_item = self._get_work_item_for_type(session, work_type)
+        if self._compiled_intent_store is None or self._compiled_intent_applicator is None or not session.campaign_id:
+            return self._ensure_work_item_for_type(
+                session,
+                work_type,
+                status=WorkItemStatus.IN_PROGRESS,
+                trigger_source="observation_review",
+                refresh_reason=review_result.summary,
+                context_refs=context_refs,
+            )
+
+        action = "refresh" if existing_item is not None else "propose"
+        compiled_intent = compile_work_intent(
+            session.campaign_id,
+            action=action,
+            work_payload={
+                "owner_role": WORK_TYPE_TO_OWNER_ROLE[work_type],
+                "work_type": work_type,
+                "goal": self._build_stage_goal(session, work_type),
+                "constraints": self._build_stage_constraints(session),
+                "priority": WorkItemPriority.HIGH.value,
+                "related_memory_refs": self._related_refs_for_work_type(session, work_type),
+                "context_refs": context_refs,
+                "trigger_source": "observation_review",
+                "refresh_reason": review_result.summary,
+                "status": WorkItemStatus.IN_PROGRESS.value,
+            },
+            source_role="observation",
+            grounding_refs=[
+                f"campaign:{review_result.campaign_id}",
+                f"review:{review_result.review_id}",
+            ],
+            confidence=1.0,
+        )
+        if compiled_intent is None:
+            return None
+        self._apply_persisted_compiled_intent(session, compiled_intent)
+        return self._get_work_item_for_type(session, work_type)
+
+    def _find_observation_work_item_change(
+        self,
+        review_result: ObservationReviewResult,
+        work_type: str,
+    ) -> ObservationSuggestedWorkItemChange | None:
+        desired_work_type = ObservationWorkItemType.STRATEGY
+        if work_type == ACCOUNT_PLANNING_WORK_TYPE:
+            desired_work_type = ObservationWorkItemType.ACCOUNT_PLANNING
+        for change in review_result.suggested_work_item_changes:
+            if change.work_type is desired_work_type:
+                return change
+        return None
+
+    def _resolve_observation_follow_on_action(
+        self,
+        review_result: ObservationReviewResult,
+        work_type: str,
+        row: ObservationSuggestedWorkItemChange | None,
+    ) -> ObservationWorkItemChangeAction:
+        if review_result.recommended_next_step is ObservationRecommendedNextStep.OPERATOR_REVIEW:
+            return ObservationWorkItemChangeAction.NONE
+
+        if review_result.recommended_next_step is ObservationRecommendedNextStep.KEEP_CURRENT_PLAN:
+            if row is not None and row.action is ObservationWorkItemChangeAction.CREATE_IF_MISSING:
+                return ObservationWorkItemChangeAction.CREATE_IF_MISSING
+            return ObservationWorkItemChangeAction.NONE
+
+        target_step = ObservationRecommendedNextStep.REFRESH_STRATEGY
+        if work_type == ACCOUNT_PLANNING_WORK_TYPE:
+            target_step = ObservationRecommendedNextStep.REFRESH_ACCOUNT_PLANNING
+        if review_result.recommended_next_step is not target_step:
+            return ObservationWorkItemChangeAction.NONE
+        if row is None:
+            return ObservationWorkItemChangeAction.REFRESH
+        if row.action is ObservationWorkItemChangeAction.REFRESH:
+            return ObservationWorkItemChangeAction.REFRESH
+        if row.action is ObservationWorkItemChangeAction.CREATE_IF_MISSING:
+            return ObservationWorkItemChangeAction.CREATE_IF_MISSING
+        return ObservationWorkItemChangeAction.NONE
+
+    def _has_open_work_item(self, session: SessionRecord, work_type: str) -> bool:
+        if self._work_item_manager is None or not session.campaign_id:
+            return False
+        return self._work_item_manager.find_latest(
+            session.campaign_id,
+            work_type=work_type,
+            statuses=OPEN_WORK_ITEM_STATUSES,
+        ) is not None
+
+    def _observation_work_status(self, review_result: ObservationReviewResult) -> WorkItemStatus:
+        if review_result.operator_attention_needed is ObservationOperatorAttention.NONE:
+            return WorkItemStatus.COMPLETED
+        return WorkItemStatus.REVIEW_PENDING
 
     def _build_scheduled_session(self, schedule: ScheduleRecord) -> SessionRecord | None:
         if self._campaign_manager is not None:
@@ -1018,12 +2622,16 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         work_type: str,
         *,
         status: WorkItemStatus = WorkItemStatus.IN_PROGRESS,
+        trigger_source: str = "",
+        refresh_reason: str = "",
+        context_refs: list[str] | None = None,
     ) -> WorkItemRecord | None:
         if self._work_item_manager is None or not session.campaign_id:
             return None
         owner_role = WORK_TYPE_TO_OWNER_ROLE.get(work_type)
         if owner_role is None:
             return None
+        resolved_context_refs = context_refs if context_refs is not None else self._related_refs_for_work_type(session, work_type)
         return self._work_item_manager.ensure_work_item(
             session.campaign_id,
             owner_role=owner_role,
@@ -1032,6 +2640,9 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             constraints=self._build_stage_constraints(session),
             priority=WorkItemPriority.HIGH,
             related_memory_refs=self._related_refs_for_work_type(session, work_type),
+            trigger_source=trigger_source,
+            refresh_reason=refresh_reason,
+            context_refs=resolved_context_refs,
             status=status,
         )
 
@@ -1045,12 +2656,30 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     ) -> None:
         if self._work_item_manager is None or work_item is None or not session.campaign_id:
             return
+        if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None:
+            compiled_intent = compile_review_request(
+                session.campaign_id,
+                review_payload={
+                    "work_item_id": work_item.work_item_id,
+                    "owner_role": work_item.owner_role,
+                    "work_type": work_item.work_type,
+                    "summary": result_summary,
+                    "related_memory_refs": list(related_memory_refs or []),
+                    "context_refs": list(related_memory_refs or []),
+                },
+                source_role="orchestrator",
+                grounding_refs=self._build_control_grounding_refs(session),
+            )
+            if compiled_intent is not None:
+                self._apply_persisted_compiled_intent(session, compiled_intent)
+                return
         self._work_item_manager.update_status(
             session.campaign_id,
             work_item.work_item_id,
             status=WorkItemStatus.REVIEW_PENDING,
             result_summary=result_summary,
             related_memory_refs=related_memory_refs,
+            context_refs=related_memory_refs,
         )
 
     def _complete_stage_work_item(
@@ -1078,17 +2707,97 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         primary_work_item = self._get_work_item_for_type(session, work_type)
         if self._work_item_manager is None or primary_work_item is None or not session.campaign_id:
             return
+        if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None:
+            compiled_intent = compile_work_intent(
+                session.campaign_id,
+                action="refresh",
+                work_payload={
+                    "owner_role": primary_work_item.owner_role,
+                    "work_type": primary_work_item.work_type,
+                    "goal": primary_work_item.goal,
+                    "constraints": list(primary_work_item.constraints),
+                    "priority": primary_work_item.priority.value,
+                    "related_memory_refs": self._related_refs_for_work_type(session, work_type),
+                    "context_refs": self._related_refs_for_work_type(session, work_type),
+                    "trigger_source": "operator_feedback",
+                    "refresh_reason": result_summary,
+                    "status": WorkItemStatus.IN_PROGRESS.value,
+                },
+                source_role="orchestrator",
+                grounding_refs=self._build_control_grounding_refs(session),
+                confidence=1.0,
+            )
+            if compiled_intent is not None:
+                self._apply_persisted_compiled_intent(session, compiled_intent)
+                return
         self._work_item_manager.update_status(
             session.campaign_id,
             primary_work_item.work_item_id,
             status=WorkItemStatus.IN_PROGRESS,
             result_summary=result_summary,
+            trigger_source="operator_feedback",
+            refresh_reason=result_summary,
+            context_refs=self._related_refs_for_work_type(session, work_type),
         )
 
     def _get_primary_work_item(self, session: SessionRecord) -> WorkItemRecord | None:
         if self._work_item_manager is None or not session.campaign_id:
             return None
-        return self._work_item_manager.get_primary_open_item(session.campaign_id)
+        open_items = self._work_item_manager.list_open_for_campaign(session.campaign_id)
+        if not open_items:
+            return None
+        return max(open_items, key=self._work_item_route_key)
+
+    def _setup_requires_orchestrator_turn(
+        self,
+        session: SessionRecord,
+        stage: WorkflowStage,
+    ) -> bool:
+        if stage is not WorkflowStage.INTAKE:
+            return False
+        return not setup_is_confirmed(get_campaign_setup_state(session))
+
+    def _get_review_pending_planning_work_item(self, session: SessionRecord) -> WorkItemRecord | None:
+        if self._work_item_manager is None or not session.campaign_id:
+            return None
+        review_pending_items = [
+            item
+            for item in self._work_item_manager.list_open_for_campaign(session.campaign_id)
+            if item.work_type != OBSERVATION_WORK_TYPE and item.status is WorkItemStatus.REVIEW_PENDING
+        ]
+        if not review_pending_items:
+            return None
+        return max(review_pending_items, key=self._work_item_route_key)
+
+    def _work_item_route_key(self, item: WorkItemRecord) -> tuple[int, int, datetime]:
+        return (
+            self._work_item_priority_rank(item.priority),
+            self._work_item_status_rank(item.status),
+            item.updated_at,
+        )
+
+    def _work_item_priority_rank(self, priority: WorkItemPriority) -> int:
+        if priority is WorkItemPriority.HIGH:
+            return 3
+        if priority is WorkItemPriority.MEDIUM:
+            return 2
+        return 1
+
+    def _work_item_status_rank(self, status: WorkItemStatus) -> int:
+        if status is WorkItemStatus.REVIEW_PENDING:
+            return 3
+        if status is WorkItemStatus.IN_PROGRESS:
+            return 2
+        if status is WorkItemStatus.PENDING:
+            return 1
+        return 0
+
+    def _build_observation_stage_summary(self, work_item: WorkItemRecord) -> str:
+        if work_item.status is WorkItemStatus.ESCALATED:
+            return "Observation review needs attention before planning continues."
+        if "no new unresolved campaign signals" in work_item.result_summary.lower():
+            return "Observation review found no new unresolved campaign signals."
+        return "Observation review updated campaign priorities."
 
     def _get_work_item_for_type(
         self,
@@ -1097,14 +2806,40 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
     ) -> WorkItemRecord | None:
         if self._work_item_manager is None or not session.campaign_id:
             return None
-        matching_items = [
-            work_item
-            for work_item in self._work_item_manager.list_for_campaign(session.campaign_id)
-            if work_item.work_type == work_type
-        ]
-        if not matching_items:
+        return self._work_item_manager.find_latest(session.campaign_id, work_type=work_type)
+
+    def _follow_on_work_needs_refresh(
+        self,
+        session: SessionRecord,
+        completed_work_type: str,
+        follow_on_work_type: str,
+    ) -> bool:
+        follow_on_work_item = self._get_work_item_for_type(session, follow_on_work_type)
+        if follow_on_work_item is None:
+            return True
+        if follow_on_work_item.status in {
+            WorkItemStatus.PENDING,
+            WorkItemStatus.IN_PROGRESS,
+            WorkItemStatus.ESCALATED,
+        }:
+            return True
+        prerequisite_artifact = self._get_latest_artifact_for_work_type(session, completed_work_type)
+        follow_on_artifact = self._get_latest_artifact_for_work_type(session, follow_on_work_type)
+        if prerequisite_artifact is None or follow_on_artifact is None:
+            return True
+        return follow_on_artifact.updated_at < prerequisite_artifact.updated_at
+
+    def _get_latest_artifact_for_work_type(
+        self,
+        session: SessionRecord,
+        work_type: str,
+    ) -> WorkflowArtifact | None:
+        if self._session_manager is None:
             return None
-        return max(matching_items, key=lambda work_item: work_item.updated_at)
+        return self._session_manager.get_latest_artifact_of_kind(
+            session,
+            _work_type_to_artifact_kind(work_type),
+        )
 
     def _list_active_work_items(self, session: SessionRecord) -> list[WorkItemRecord]:
         if self._work_item_manager is None or not session.campaign_id:
@@ -1177,11 +2912,57 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         if work_item.constraints:
             lines.append("Work item constraints:")
             lines.extend(f"- {constraint}" for constraint in work_item.constraints if constraint.strip())
+        if work_item.refresh_reason:
+            lines.append(f"Work item refresh reason: {work_item.refresh_reason}")
         if work_item.result_summary:
             lines.append(f"Current work item summary: {work_item.result_summary}")
         if normalized_message:
             lines.append(f"Operator follow-up: {normalized_message}")
         return "\n".join(lines).strip()
+
+    def _review_prompt_for_work_type(self, session: SessionRecord, work_type: str) -> str:
+        review_posture = self._latest_review_posture(session, work_type)
+        if review_posture is not None:
+            operator_prompt = str(review_posture.payload.get("operator_prompt", "")).strip()
+            if operator_prompt:
+                return operator_prompt
+        return self._fallback_review_prompt_for_work_type(work_type)
+
+    def _fallback_review_prompt_for_work_type(self, work_type: str) -> str:
+        return {
+            DISCOVERY_WORK_TYPE: "I have a shortlist ready. Tell me what to change, or tell me if you want me to move into strategy next.",
+            STRATEGY_WORK_TYPE: "I have a strategy draft ready. Tell me what to change, or tell me if you want me to move into account planning next.",
+            ACCOUNT_PLANNING_WORK_TYPE: "I have an account plan ready. Tell me what to change, or tell me when you want to lock this revision in.",
+        }[work_type]
+
+    def _up_to_date_prompt_for_work_type(self, session: SessionRecord, work_type: str) -> str:
+        work_label = self._work_type_label(work_type).lower()
+        return (
+            f"The current {work_label} already matches the latest approved inputs. "
+            f"{self._review_prompt_for_work_type(session, work_type)}"
+        )
+
+    def _approval_completion_prompt(self, session: SessionRecord, work_type: str) -> str:
+        if work_type != ACCOUNT_PLANNING_WORK_TYPE:
+            return "I saved that review outcome. Tell me what you want to refresh next."
+        execution_state_impact = self._latest_execution_state_impact(session, work_type)
+        activation_phrase = "activate"
+        if execution_state_impact is not None:
+            resolved_phrase = str(execution_state_impact.payload.get("activation_phrase", "")).strip()
+            if resolved_phrase:
+                activation_phrase = resolved_phrase
+        return (
+            "The account assignment plan is approved in chat. "
+            f"Say `{activation_phrase}` when you want me to prepare live execution from this revision, "
+            "or tell me what to refresh later."
+        )
+
+    def _work_type_label(self, work_type: str) -> str:
+        return {
+            DISCOVERY_WORK_TYPE: "Discovery",
+            STRATEGY_WORK_TYPE: "Strategy",
+            ACCOUNT_PLANNING_WORK_TYPE: "Account planning",
+        }.get(work_type, work_type.replace("_", " ").title())
 
     def _related_refs_for_session_artifact(
         self,
@@ -1195,6 +2976,41 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             return []
         return [f"artifact:{artifact.artifact_id}"]
 
+    def _invalidate_prepared_execution_for_latest_plan(self, session: SessionRecord) -> str:
+        if self._prepared_execution_service is None:
+            return ""
+        if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None and session.campaign_id:
+            latest_plan = (
+                self._session_manager.get_latest_artifact_of_kind(
+                    session,
+                    WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN,
+                )
+                if self._session_manager is not None
+                else None
+            )
+            compiled_intent = compile_prepared_execution_invalidation(
+                session.campaign_id,
+                invalidation_payload={
+                    "reason": "A newer account-plan revision replaced the previously prepared execution state.",
+                    "source_plan_artifact_id": latest_plan.artifact_id if latest_plan is not None else "",
+                },
+                source_role="orchestrator",
+                grounding_refs=[
+                    *self._build_control_grounding_refs(session),
+                    *self._related_refs_for_session_artifact(session, WorkflowArtifactKind.ACCOUNT_ASSIGNMENT_PLAN),
+                ],
+                confidence=1.0,
+            )
+            return self._apply_persisted_compiled_intent(session, compiled_intent)
+        invalidation = self._prepared_execution_service.invalidate_stale_prepared_state(session)
+        if not invalidation.changed:
+            return ""
+        return (
+            "The previously prepared execution state no longer matches this revised plan, so I invalidated the "
+            f"older unstarted batch and cancelled {len(invalidation.cancelled_action_ids)} queued action(s). "
+            "Approve this revision and say `activate` when you want me to prepare the latest version."
+        )
+
     def _apply_schedule_action_from_output(
         self,
         session: SessionRecord,
@@ -1202,23 +3018,101 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
         final_output_text: str,
         response_text: str,
     ) -> str:
-        payload = parse_marked_json_block(final_output_text, SCHEDULE_ACTION_JSON_MARKER)
-        if payload is None:
-            return response_text
+        output_proposals = parse_output_proposal_list(final_output_text) or []
+        actionable_proposals = [
+            proposal
+            for proposal in output_proposals
+            if str(proposal.get("kind", "")).strip()
+            in {
+                "schedule.create",
+                "schedule.pause",
+                "schedule.resume",
+                "live_action.enqueue_low_risk",
+                "live_action.enqueue_operator_send",
+            }
+        ]
+        if actionable_proposals:
+            stripped_response = self._strip_output_proposals_block(response_text)
+            if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None and session.campaign_id:
+                summaries = []
+                compiled_intents = compile_output_proposals(
+                    session.campaign_id,
+                    actionable_proposals,
+                    source_role="orchestrator",
+                    grounding_refs=self._build_schedule_grounding_refs(session),
+                )
+                for compiled_intent in compiled_intents:
+                    summaries.append(self._apply_persisted_compiled_intent(session, compiled_intent))
+                if not summaries:
+                    return stripped_response
+                return self._append_runtime_note(
+                    stripped_response,
+                    "\n\n".join(summary for summary in summaries if summary.strip()),
+                )
 
-        stripped_response = self._strip_marked_json_block(response_text, SCHEDULE_ACTION_JSON_MARKER)
-        validation_error = validate_schedule_action(payload)
-        if validation_error is not None:
-            return self._append_runtime_note(
-                stripped_response,
-                "I did not save the recurring schedule because the structured schedule action was incomplete. "
-                + validation_error,
-            )
+            legacy_schedule_proposals = [
+                proposal
+                for proposal in actionable_proposals
+                if str(proposal.get("kind", "")).strip() in {"schedule.create", "schedule.pause", "schedule.resume"}
+            ]
+            if not legacy_schedule_proposals:
+                return self._append_runtime_note(
+                    stripped_response,
+                    "I recognized a runtime action proposal, but compiled-intent execution is not available in this runtime yet.",
+                )
 
-        summary = self._apply_schedule_action(session, payload)
-        return self._append_runtime_note(stripped_response, summary)
+            legacy_payload = self._legacy_schedule_action_from_output_proposal(legacy_schedule_proposals[0])
+            validation_error = validate_schedule_action(legacy_payload)
+            if validation_error is not None:
+                return self._append_runtime_note(
+                    stripped_response,
+                    "I did not save the recurring schedule because the structured schedule action was incomplete. "
+                    + validation_error,
+                )
+            summary = self._apply_schedule_action(session, legacy_payload)
+            return self._append_runtime_note(stripped_response, summary)
+
+        return response_text
 
     def _apply_schedule_action(
+        self,
+        session: SessionRecord,
+        payload: dict[str, object],
+    ) -> str:
+        if self._compiled_intent_store is not None and self._compiled_intent_applicator is not None and session.campaign_id:
+            return self._apply_compiled_schedule_action(session, payload)
+        return self._apply_schedule_action_legacy(session, payload)
+
+    def _apply_compiled_schedule_action(
+        self,
+        session: SessionRecord,
+        payload: dict[str, object],
+    ) -> str:
+        if not session.campaign_id:
+            return "Recurring schedule changes are not available in this runtime yet."
+
+        compiled_intent = compile_schedule_action(
+            session.campaign_id,
+            payload,
+            source_role="orchestrator",
+            grounding_refs=self._build_schedule_grounding_refs(session),
+        )
+        if compiled_intent is None:
+            return "I did not save the recurring schedule because the action payload was malformed."
+        return self._apply_persisted_compiled_intent(session, compiled_intent)
+
+    def _build_schedule_grounding_refs(self, session: SessionRecord) -> list[str]:
+        refs = [f"session:{session.session_id}"]
+        if session.campaign_id:
+            refs.append(f"campaign:{session.campaign_id}")
+        current_stage = get_workflow_snapshot(session).stage.value
+        refs.append(f"workflow_stage:{current_stage}")
+        latest_brief = get_campaign_brief_artifact(session)
+        if latest_brief is not None:
+            refs.append(f"artifact:{latest_brief.artifact_id}")
+        return refs
+
+    def _apply_schedule_action_legacy(
         self,
         session: SessionRecord,
         payload: dict[str, object],
@@ -1343,11 +3237,63 @@ class PurposeBuiltOrchestrator(OrchestratorTurnHandler):
             return cleaned_note
         return f"{cleaned_response}\n\n{cleaned_note}"
 
-    def _strip_marked_json_block(self, output: str, marker: str) -> str:
-        if marker not in output:
-            return output.strip()
-        operator_text, _, _ = output.partition(marker)
-        return operator_text.strip()
+    def _append_capability_notice(self, response_text: str) -> str:
+        notice = self._build_capability_notice()
+        if not notice:
+            return response_text
+        if notice.lower() in response_text.lower():
+            return response_text
+        return self._append_runtime_note(response_text, notice)
+
+    def _build_capability_notice(self) -> str:
+        capability_summary = self._agent_runtime_broker.build_telegram_capability_summary()
+        if not capability_summary or not capability_summary.get("operator_action_required"):
+            return ""
+
+        live_readiness = str(capability_summary.get("live_readiness", "")).strip()
+        if live_readiness == "stubbed":
+            return (
+                "Runtime notice: live Telegram capability is still running in stub mode, so any live-search or "
+                "live-account evidence is limited. Set `TELEGRAM_CAPABILITY_BACKEND=telethon` and run `/addaccount` "
+                "to enable real Telegram reads."
+            )
+        if live_readiness == "no_accounts":
+            return (
+                "Runtime notice: the Telethon backend is enabled, but no managed Telegram accounts are onboarded "
+                "yet. Run `/addaccount` so discovery, strategy, and execution can use live Telegram data."
+            )
+        summary = str(capability_summary.get("summary", "")).strip()
+        next_step = str(capability_summary.get("next_step", "")).strip()
+        return " ".join(part for part in [f"Runtime notice: {summary}" if summary else "", next_step] if part).strip()
+
+    def _strip_output_proposals_block(self, output: str) -> str:
+        return strip_marked_block(output, OUTPUT_PROPOSALS_JSON_MARKER)
+
+    def _legacy_schedule_action_from_output_proposal(
+        self,
+        proposal: dict[str, object],
+    ) -> dict[str, object]:
+        kind = str(proposal.get("kind", "")).strip()
+        schedule_payload = proposal.get("payload")
+        action = kind.removeprefix("schedule.")
+        return {
+            "action": action,
+            "schedule": dict(schedule_payload) if isinstance(schedule_payload, dict) else {},
+        }
+
+    def _refresh_continuous_ops(
+        self,
+        *,
+        session: SessionRecord | None = None,
+        campaign_id: str | None = None,
+    ) -> None:
+        if self._continuous_ops_manager is None:
+            return
+        if session is not None and session.campaign_id:
+            self._continuous_ops_manager.refresh_for_session(session)
+            return
+        if campaign_id:
+            self._continuous_ops_manager.refresh_for_campaign(campaign_id)
 
     def _humanize_interval_minutes(self, interval_minutes: int) -> str:
         if interval_minutes % (60 * 24 * 7) == 0:

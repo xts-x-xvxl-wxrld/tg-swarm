@@ -1,0 +1,27 @@
+{
+  "approved_claims": [],
+  "campaign_id": "87e22083-bf47-4949-b568-b00b83c1dfe0",
+  "community_tone_guidance": [],
+  "confirmed_areas": [
+    "voice_profile"
+  ],
+  "escalation_rules": [],
+  "forbidden_claims": [],
+  "operator_preferences": [
+    "Runtime update: the sandbox now supports autonomous group outreach sends through the live execution path. send_group_message is authorized in the autonomous send family, alongside group replies and DM replies.\n\nImportant distinction:\n- Direct low-risk compiled actions are still only for join_community, mark_read, and leave_dialog\n- So if you try to send by using the low-risk direct-action path, that is still unsupported\n- But if you are planning or executing autonomous outreach inside the sandbox, group messages can now be queued/executed through the proper send path\n\nFor this sandbox, you may use autonomous group outreach in our test spaces."
+  ],
+  "updated_at": "2026-05-31T16:27:09.363992+00:00",
+  "updated_by": "519192084",
+  "voice_profile": {
+    "cta_style": "",
+    "emoji_policy": "",
+    "evidence_style": "",
+    "style_avoid": [],
+    "style_do": [
+      "answer more directly"
+    ],
+    "tone_descriptors": [
+      "direct"
+    ]
+  }
+}
